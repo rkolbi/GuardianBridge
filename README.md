@@ -158,7 +158,7 @@ sudo chmod -R 775 /opt/GuardianBridge
 
 ## Contributing
 
-Contributions are welcome! If you have an idea for a new feature or have found a bug, please open an issue on the GitHub repository. If you'd like to contribute code, please fork the repository and submit a pull request.
+Contributions are welcome! If you'd like to contribute code, please let me know.
 
 ## License
 
