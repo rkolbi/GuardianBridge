@@ -157,6 +157,22 @@ meshtastic --set lora.modem_preset MEDIUM_FAST
 
 We welcome contributions! Please see our [Contributing Guide](./CONTRIBUTING.md) for details on how to get started.
 
-## License
+## **License**
 
-This program is free software, distributed under the terms of the **GNU General Public License v3.0**. See the `LICENSE` file for details.
+Copyright © 2025 Robert Kolbasowski  
+
+This project is licensed under the **GNU General Public License v3.0 (GPL-3.0)**.  
+You are free to use, modify, and redistribute this software under the terms of the GPL-3.0.  
+
+See the [GNU General Public License v3.0](https://www.gnu.org/licenses/gpl-3.0.html) or the `LICENSE` file included in this repository for the complete license text.
+
+---
+
+## **Disclaimer**
+
+This software is provided **"as is"**, without any express or implied warranties, including but not limited to the implied warranties of **merchantability** or **fitness for a particular purpose**. See the GNU General Public License for more details.
+
+This is an independent project and is **not affiliated with, endorsed by, or supported by Meshtastic LLC**.  
+Meshtastic® is a registered trademark of Meshtastic LLC. Meshtastic software components are licensed separately; please refer to the official [Meshtastic GitHub](https://github.com/meshtastic) for more information.
+
+Use GuardianBridge at your own risk—no warranty is provided.
