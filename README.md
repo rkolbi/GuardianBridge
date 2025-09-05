@@ -155,7 +155,7 @@ meshtastic --set lora.modem_preset MEDIUM_FAST
 
 ## Contributing
 
-We welcome contributions!
+We welcome contributions! Please see our [Contributing Guide](./CONTRIBUTING.md) for details on how to get started.
 
 ## License
 
