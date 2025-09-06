@@ -312,4 +312,3 @@ All files are located within the `/opt/GuardianBridge/` directory.
 This project is in active development. Future enhancements being considered include:
 
   * **Direct SAME/EAS Integration**: Ingesting alert streams directly from NOAA Weather Radio broadcasts for ultimate redundancy, providing a layer of protection that does not depend on any internet connection.
-  * **Canned Status Messages**: Implementing quick commands for users to broadcast their status (e.g., "I'm OK," "Need Assistance," "Have Supplies") for rapid community check-ins during an emergency.
