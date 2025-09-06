@@ -211,7 +211,7 @@ Interact with the GuardianBridge gateway by sending it Direct Messages from your
 
 | Command | Description |
 | :--- | :--- |
-| `help` | Shows a list of available commands. |
+| `?` | Shows a list of available commands. |
 | `subscribe` | Subscribes you to all automated broadcasts. |
 | `unsubscribe` | Unsubscribes you from all broadcasts. |
 | `status` | Shows your current name, subscription settings, and assigned tags. |
@@ -223,7 +223,7 @@ Interact with the GuardianBridge gateway by sending it Direct Messages from your
 
 | Command | Description |
 | :--- | :--- |
-| `?` | Instantly fetches the current or next upcoming forecast. |
+| `wx` | Instantly fetches the current or next upcoming forecast. |
 | `name/YourName` | Registers or updates your display name. Must be a single word. Ex: `name/John` |
 | `email/to/subj/body` | Sends an email. Ex: `email/friend@test.com/Mesh Msg/Hello from the field!` |
 | `tagsend/tags/msg`| Sends a message to a tag group. Ex: `tagsend/CERT/Meeting at 5`. *Requires admin-granted permission.* |
