@@ -1,0 +1,763 @@
+<!--
+GuardianBridge - A Meshtastic Gateway for Community Resilience
+Copyright (C) 2025 Robert Kolbasowski
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
+-->
+<div style="color: #E3E3E3; font-family: sans-serif;">
+  <h1 style="font-size: 2.25rem; font-weight: bold; margin: 0; color: #E3E3E3; background-image: linear-gradient(to right, #89B3F8, #A58AFB); -webkit-background-clip: text; background-clip: text; color: transparent;">GuardianBridge</h1>
+  <p style="font-size: 1.1rem; color: #E3E3E3; margin: 0.25rem 0 0 0;">
+    <i>Keeping your community safe, informed, and connected when it matters most.</i>
+  </p>
+  <div style="margin-top: 1.5rem; font-size: 0.9rem; color: #B0B3B8;">
+    <p style="margin: 0.25rem 0;"><strong>Revision:</strong> v 1.1.0</p>
+    <p style="margin: 0.25rem 0;"><strong>Copyright:</strong> © 2025 Robert Kolbasowski.</p>
+  </div>
+</div>
+<br>
+<h2 id='manual-title'>Part 1: GuardianBridge User Manual</h2>
+<h3 id='table-of-contents'>Table of Contents</h3>
+<ul>
+  <li><a href="#1-what-is-guardianbridge">1. What is GuardianBridge?</a></li>
+  <li><a href="#2-system-philosophy">2. System Philosophy</a></li>
+  <li><a href="#3-core-capabilities">3. Core Capabilities</a></li>
+  <li><a href="#4-functionality-deep-dive">4. Functionality Deep-Dive</a></li>
+  <li><a href="#5-the-guardianbridge-admin-panel">5. The Admin Panel</a></li>
+  <li><a href="#6-installation--setup">6. Installation &amp; Setup</a></li>
+  <li><a href="#7-user--admin-guides">7. User &amp; Admin Guides</a></li>
+  <li><a href="#8-system-architecture">8. System Architecture</a></li>
+  <li><a href="#9-file-structure">9. File Structure</a></li>
+  <li><a href="#10-troubleshooting">10. Troubleshooting</a></li>
+  <li><a href="#11-project-roadmap">11. Project Roadmap</a></li>
+</ul>
+<h2 id='1-what-is-guardianbridge'>1. What is GuardianBridge?</h2>
+<p>GuardianBridge is a complete, self-contained communication gateway system. It leverages the power of LoRa (Long Range) mesh networking through the Meshtastic platform to create an independent, resilient communication network that your community builds and owns.</p>
+<h3 id='the-power-of-lora-and-meshtastic'>The Power of LoRa and Meshtastic</h3>
+<p>Meshtastic is an open-source project that uses inexpensive LoRa radios for long-range, off-grid communication. It is designed for scenarios where traditional communication infrastructure is unavailable or unreliable.</p>
+<ul>
+<li><strong>Mesh Network Resilience</strong>: Every node in the network acts as a mini-repeater, letting messages hop across devices to route around obstacles or signal failures. This creates a self-healing mesh that routes messages around obstacles or failed nodes, ensuring every member of the group can receive messages.</li><li><strong>Decentralized and Off-Grid</strong>: The network operates without any reliance on cell towers, internet providers, or a dedicated central router. This makes it ideal for communication in remote areas or during emergencies.</li>
+<li><strong>Accessible &amp; Low-Power</strong>: The system is designed to run 24/7 on affordable, low-power hardware like a Raspberry Pi. A typical Meshtastic node can be built from low-cost components, making it easy to build and expand a community network.</li>
+<li><strong>User-Friendly App</strong>: The free Meshtastic app for Android and iOS connects to the LoRa modules via Bluetooth and provides a familiar text-messaging-like interface, making it easy for anyone to use.</li>
+<li><strong>Encrypted Communication</strong>: Messages sent over the network are encrypted to ensure privacy and security.</li>
+</ul>
+<h2 id='2-system-philosophy'>2. System Philosophy</h2>
+<p>This project is built on three core principles:</p>
+<ol>
+<li><strong>Resilience over Speed</strong>: The system is designed to be fault-tolerant. Its modular architecture ensures that a failure in one component (like fetching email) will not crash the core radio dispatcher. This makes it reliable for long-term, unattended operation in potentially unstable conditions.</li>
+<li><strong>Modularity and Simplicity</strong>: Each major function is handled by a separate, simple script. This makes the system easier to understand, maintain, and extend. Communication via the file system is a deliberate choice to decouple the components, allowing them to work independently.</li>
+<li><strong>Efficiency for Low-Power Devices</strong>: The gateway is optimized to run 24/7 on single-board computers like the Raspberry Pi. The use of an event-driven architecture (<code>watchdog</code>) instead of constant polling minimizes unnecessary CPU cycles and disk I/O, respecting the resource constraints of such devices.</li>
+</ol>
+<h2 id='3-core-capabilities'>3. Core Capabilities</h2>
+<p>GuardianBridge provides a rich set of automated and on-demand features to keep your community safe and informed.</p>
+<ul>
+<li><strong>Automated Weather &amp; Forecasts</strong>: Receive periodic updates on current weather conditions and scheduled daily forecasts directly on your Meshtastic device.</li>
+<li><strong>Critical NWS Alerts</strong>: Get timely, automated alerts from the National Weather Service, including warnings for tornadoes, floods, and other severe events.</li>
+<li><strong>Two-Way Email Gateway</strong>: A user can send an email from the mesh with a simple command. Conversely, an external user can send an email to the gateway's address, and the message is relayed to the intended mesh user.</li>
+<li><strong>Email-Based Broadcasts</strong>: Authorized administrators can send network-wide broadcast messages simply by sending an email with the subject line <code>broadcast</code> or <code>!broadcast</code> (for an audible alert).</li>
+<li><strong>Tag-Based Group Messaging</strong>: Assign tags (e.g., <code>CERT</code>, <code>MEDICAL</code>) to users to create logical groups. Admins and authorized users can then send targeted messages to these groups via email or from their node.</li>
+<li><strong>Flexible Scheduled Broadcasts</strong>: The administrator can configure custom, recurring messages or one-time event announcements to be broadcast on a fine-grained schedule using the Admin Panel.</li>
+<li><strong>User Self-Service</strong>: Users can subscribe, unsubscribe, register a name, and toggle individual broadcast types using simple direct messages to the gateway.</li>
+<li><strong>SOS Emergency Alert System</strong>: Users can trigger an alert (general, police, fire, medical) and admins can manage the response, including remote clearance.</li>
+<li><strong>Satellite-Resilient</strong>: When the gateway server is connected to a satellite internet provider like Starlink, it remains resilient to local terrestrial infrastructure damage, as satellite internet often stays online when cable and cellular go dark.</li>
+</ul>
+<h2 id='4-functionality-deep-dive'>4. Functionality Deep-Dive</h2>
+<h4 id='weather--nws-alerts'>Weather &amp; NWS Alerts</h4>
+<p>The <code>weather_fetcher.py</code> script uses your configured <code>LATITUDE</code> and <code>LONGITUDE</code> to find the nearest NWS grid point and observation station. It fetches data and saves it locally. This minimizes external API calls and allows the gateway to function even if the internet connection is temporarily lost, broadcasting the last known data. The <code>meshtastic_dispatcher.py</code> checks these files at intervals defined in the <code>.env</code> file and broadcasts to all subscribed users.</p>
+<h4 id='two-way-email-gateway'>Two-Way Email Gateway</h4>
+<ul>
+<li><p><strong>Sending (Mesh -&gt; Email)</strong>: A user sends a DM to the gateway: <code>email/recipient@domain.com/Subject/Body</code>. The dispatcher writes this task to <code>data/outgoing_emails.json</code>. The <code>email_processor.py</code> cron job picks it up, sends the email, and includes a helpful footer explaining how to reply.</p>
+</li>
+<li><p><strong>Receiving (Email -&gt; Mesh)</strong>: A person sends an email to the gateway's address. The system uses a 4-tier logic to find the recipient:</p>
+<ol>
+<li>It first checks the subject line for a node ID (e.g., <code>!a1b2c3d4</code>) or registered name.</li>
+<li>If not found, it checks the full "To:" header for a node ID.</li>
+<li>If not found, it checks the email body for the "sent the following message:" watermark from a previous reply.</li>
+<li>As a last resort, it scans the entire email body for any node ID.
+The <code>email_processor.py</code> script then intelligently strips the original message from the reply and creates a command file in <code>data/commands/</code>. The dispatcher instantly detects this new file and sends the message to the correct node.</li>
+</ol>
+</li>
+<li><p><strong>Broadcast (Email -&gt; Mesh)</strong>: An authorized admin sends an email to the gateway's address with the subject <code>broadcast</code>. The system verifies the sender's permissions, prefixes the message with "FM [Admin Name]:", and broadcasts it to the entire network. A confirmation or rejection email is automatically sent back to the sender. If the subject is <code>!broadcast</code> or <code>broadcast!</code>, an audible bell character is prepended to the message for an alert.</p>
+</li>
+</ul>
+<h4 id='tag-based-group-messaging'>Tag-Based Group Messaging</h4>
+<p>This powerful feature allows for targeted communication to specific groups. Tags (e.g., <code>CERT</code>, <code>MEDICAL</code>) are assigned to users by an administrator in the web panel. This provides a secure way to manage group membership.</p>
+<ul>
+<li><strong>Email to Tag Group</strong>: An authorized user can send a message to all members of one or more groups by sending an email to the gateway address with a subject like <code>Tag CERT MEDICAL</code>. The system finds all users who have either the <code>CERT</code> or <code>MEDICAL</code> tag and relays the email body to them.</li>
+<li><strong>Node to Tag Group</strong>: A user with the "Node Tag Send" permission (granted by an admin) can send a message directly from their device to a tag group using the <code>tagsend</code> command.</li>
+</ul>
+<h4 id='flexible-scheduled-broadcasts'>Flexible Scheduled Broadcasts</h4>
+<p>The <code>data/dispatcher.txt</code> file holds a JSON array of broadcast jobs. This allows for complex scheduling without modifying code. The dispatcher checks this file every minute and evaluates each job's rules (<code>days</code>, <code>start_time</code>, <code>stop_time</code>, <code>interval_mins</code>) to see if a broadcast is due. It tracks the <code>last_sent</code> timestamp within the file itself to ensure it respects the specified interval.</p>
+<h4 id='sos-emergency-alert-system'>SOS Emergency Alert System</h4>
+<p>A comprehensive SOS system allows users to signal for help and administrators to manage the response.</p>
+<ul>
+<li><strong>User Commands</strong>: Users trigger alerts by sending <code>SOS</code> (general), <code>SOSP</code> (police), <code>SOSF</code> (fire), or <code>SOSM</code> (medical) as a Direct Message to the gateway. To cancel, they send <code>CLEAR</code>, <code>CANCEL</code>, or <code>SAFE</code>.</li>
+<li><strong>Backend Automation</strong>: Upon receiving an SOS, the <code>meshtastic_dispatcher.py</code> immediately requests a fresh location update from the user's node. The event is logged in <code>sos_log.json</code> for persistent record-keeping. The alert is relayed as a high-priority DM to subscribed users with corresponding "responder" tags, including the sender's name and last known location with a map link.</li>
+<li><strong>Active Status</strong>: A user's active SOS status is recorded in <code>node_status.json</code>, persisting even if the node goes offline.</li>
+<li><strong>Admin Clearance</strong>: Administrators can remotely clear an active SOS using the "Admin Clear SOS" button in the web UI. This sends a "STAND DOWN" message to responders and clears the SOS status.</li>
+</ul>
+<h2 id='5-the-guardianbridge-admin-panel'>5. The GuardianBridge Admin Panel</h2>
+<p>The Admin Panel (<code>map.php</code>) provides a comprehensive, web-based user interface for managing and monitoring the entire GuardianBridge system. From this single-page dashboard, you can check system health, manually trigger actions, manage users, create complex scheduled broadcasts, and modify core system settings without ever needing to touch the command line.</p>
+<h4 id='functional-guide-by-tab'>Functional Guide by Tab</h4>
+<ul>
+<li><strong>Status Tab</strong>: Your main dashboard for monitoring the gateway's health, including service status (active/inactive), radio connection, and the last time the cron jobs for weather and email ran. It features a live map and node list that automatically refreshes every 5 seconds by fetching data from <code>api_get_nodes.php</code>. Nodes with an active SOS are highlighted with a distinct red icon on the map and in the node list.</li>
+<li><strong>Chat Tab</strong>: Provides a real-time interface for monitoring and participating in mesh network conversations, polling for updates. You can broadcast messages to the main channel or send Direct Messages (DMs) to a specific user. Filters allow you to selectively show or hide Direct Messages and system-generated server messages. Clicking a user's Node ID opens a dedicated DM chat modal for private conversations.</li>
+<li><strong>Actions Tab</strong>: Allows you to perform manual tasks like forcing an immediate weather fetch or email processing cycle. You can also view and clear the queue of outgoing emails and the queue for failed direct messages. A new "SOS Alert Log" displays a full history of all received SOS alerts.</li>
+<li><strong>Broadcasts Tab</strong>: A powerful interface for managing custom, automated messages. You can create recurring jobs (e.g., a "Good Morning" message every weekday) or one-time announcements for a specific date and time range.</li>
+<li><strong>Users Tab</strong>: Provides full control over subscribers. You can edit user names, full names, phone numbers, email, addresses, and notes. You can toggle individual subscriptions (alerts, weather, forecast) and manage advanced permissions like email send/receive/broadcast and node tag send. You can also manage assigned tags and set a "blocked" status to ignore all commands from a specific user. The tab displays both the assigned role and the live reported role from the node's radio, highlighting discrepancies.</li>
+<li><strong>Settings Tab</strong>: Allows for easy editing of the system's core configuration file (<code>.env</code>). This is where you can change GPS coordinates, email credentials, or broadcast intervals. <strong>Remember to restart the dispatcher service after saving!</strong></li>
+<li><strong>Help/About Tab</strong>: Contains this detailed system documentation and version information.</li>
+</ul>
+<h2 id='6-installation--setup'>6. Installation &amp; Setup</h2>
+<p>This guide walks you through the complete setup for both the backend services and the web admin panel.</p>
+<h3 id='prerequisites'>Prerequisites</h3>
+<ul>
+<li>A Linux server (Raspberry Pi OS recommended) with Python 3.9+ and Git.</li>
+<li>A Meshtastic device (e.g., Heltec ESP32) connected to the server via USB.</li>
+<li>A web server with PHP support (e.g., Apache2, Nginx). The <code>shell_exec</code> function must be enabled in PHP.</li>
+<li>An email account for the gateway (a Gmail account with a 16-digit App Password is recommended).</li>
+</ul>
+<h3 id='step-1-install-backend-services'>Step 1: Install Backend Services</h3>
+<ol>
+<li><p><strong>Clone the repository and move it to the recommended directory:</strong></p>
+<pre><code class='language-shell' lang='shell'>git clone &lt;your-repository-url&gt; ~/guardian-bridge
+sudo mv ~/guardian-bridge /opt/GuardianBridge
+</code></pre>
+</li>
+<li><p><strong>Create data directories and set ownership:</strong></p>
+<pre><code class='language-shell' lang='shell'>sudo mkdir -p /opt/GuardianBridge/data/commands
+sudo chown -R pi:pi /opt/GuardianBridge
+cd /opt/GuardianBridge
+</code></pre>
+<p><em>Replace <code>pi:pi</code> with your user and group if different.</em></p>
+</li>
+<li><p><strong>Install Python dependencies:</strong></p>
+<pre><code class='language-shell' lang='shell'>pip3 install -r requirements.txt
+</code></pre>
+</li>
+</ol>
+<h3 id='step-2-install-web-admin-panel'>Step 2: Install Web Admin Panel</h3>
+<ol>
+<li><p><strong>Install a web server if you don't have one:</strong></p>
+<pre><code class='language-shell' lang='shell'>sudo apt-get update
+sudo apt-get install apache2 php libapache2-mod-php -y
+</code></pre>
+</li>
+<li><p><strong>Place the admin panel file in the web root:</strong></p>
+<pre><code class='language-shell' lang='shell'>sudo cp /path/to/your/map.php /var/www/html/index.php
+</code></pre>
+<p><em>Renaming it to <code>index.php</code> makes it the default page when you navigate to the server's IP address.</em></p>
+</li>
+<li><p><strong>Set crucial file permissions for the web server:</strong> This is the most critical step. The web server user (<code>www-data</code>) needs to be able to write to the project directory.</p>
+<pre><code class='language-shell' lang='shell'>sudo usermod -a -G www-data pi
+sudo chown -R pi:www-data /opt/GuardianBridge
+sudo chmod -R 775 /opt/GuardianBridge
+</code></pre>
+<p><strong>A system reboot or logging out and back in</strong> is required for the group change to take effect.</p>
+</li>
+</ol>
+<h3 id='step-3-configure-the-system'>Step 3: Configure the System</h3>
+<ol>
+<li><p><strong>Create the <code>.env</code> file from the template:</strong> <code>cp .env.txt .env</code></p>
+</li>
+<li><p><strong>Edit the <code>.env</code> file</strong> (<code>nano .env</code>) with your specific details (GPS coordinates, email credentials, etc.). You can also edit this later from the Admin Panel's "Settings" tab.</p>
+</li>
+<li><p><strong>Set a secure Admin Password:</strong></p>
+<ul>
+<li>Create a temporary PHP file (e.g., <code>hash_gen.php</code>) in your web directory with the content: <code>&lt;?php echo password_hash('YourNewPassword', PASSWORD_DEFAULT); ?&gt;</code></li>
+<li>Access this file in your browser, copy the resulting hash string.</li>
+<li>Open <code>map.php</code> (now at <code>/var/www/html/index.php</code>) and replace the example hash in the <code>$admin_password_hash</code> variable with your new one.</li>
+</ul>
+</li>
+</ol>
+<h3 id='step-4-enable-and-start-services'>Step 4: Enable and Start Services</h3>
+<ol>
+<li><p><strong>Create and enable the dispatcher service.</strong> Create the file <code>sudo nano /etc/systemd/system/guardianbridge.service</code> with the following content:</p>
+<pre><code class='language-shell' lang='shell'>[Unit]
+Description=Meshtastic Dispatcher Service
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/opt/GuardianBridge
+ExecStart=/usr/bin/python3 /opt/GuardianBridge/meshtastic_dispatcher.py
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+</code></pre>
+</li>
+<li><p><strong>Enable and start the service:</strong></p>
+<pre><code class='language-shell' lang='shell'>sudo systemctl daemon-reload
+sudo systemctl enable guardianbridge.service
+sudo systemctl start guardianbridge.service
+</code></pre>
+</li>
+<li><p><strong>Set up Cron Jobs</strong> for periodic tasks by editing the crontab (<code>crontab -e</code>):</p>
+<pre><code class='language-shell' lang='shell'># Fetch weather data every 15 minutes
+*/15 * * * * /usr/bin/python3 /opt/GuardianBridge/weather_fetcher.py &gt;&gt; /opt/GuardianBridge/data/cron.log 2&gt;&amp;1
+
+# Process incoming and outgoing emails every 5 minutes
+*/5 * * * * /usr/bin/python3 /opt/GuardianBridge/email_processor.py &gt;&gt; /opt/GuardianBridge/data/cron.log 2&gt;&amp;1
+</code></pre>
+</li>
+</ol>
+<h2 id='7-user--admin-guides'>7. User &amp; Admin Guides</h2>
+<h3 id='end-user-guide-interacting-via-meshtastic'>End-User Guide (Interacting via Meshtastic)</h3>
+<p>Interact with the GuardianBridge gateway by sending it Direct Messages from your Meshtastic device.</p>
+<h4 id='subscription--status-commands'>Subscription &amp; Status Commands</h4>
+<figure class='table-figure'><table>
+<thead>
+<tr><th style='text-align:left;' >Command</th><th style='text-align:left;' >Description</th></tr></thead>
+<tbody><tr><td style='text-align:left;' ><code>help</code></td><td style='text-align:left;' >Shows a list of available commands.</td></tr><tr><td style='text-align:left;' ><code>subscribe</code></td><td style='text-align:left;' >Subscribes you to all automated broadcasts.</td></tr><tr><td style='text-align:left;' ><code>unsubscribe</code></td><td style='text-align:left;' >Unsubscribes you from all broadcasts.</td></tr><tr><td style='text-align:left;' ><code>status</code></td><td style='text-align:left;' >Shows your current name, subscription settings, and assigned tags.</td></tr><tr><td style='text-align:left;' ><code>alerts on/off</code></td><td style='text-align:left;' >Toggles NWS weather alerts.</td></tr><tr><td style='text-align:left;' ><code>weather on/off</code></td><td style='text-align:left;' >Toggles periodic current weather updates.</td></tr><tr><td style='text-align:left;' ><code>forecasts on/off</code></td><td style='text-align:left;' >Toggles scheduled daily forecasts.</td></tr></tbody>
+</table></figure>
+<h4 id='on-demand-group--email-commands'>On-Demand, Group &amp; Email Commands</h4>
+<figure class='table-figure'><table>
+<thead>
+<tr><th style='text-align:left;' >Command</th><th style='text-align:left;' >Description</th></tr></thead>
+<tbody><tr><td style='text-align:left;' ><code>?</code></td><td style='text-align:left;' >Instantly fetches the current or next upcoming forecast.</td></tr><tr><td style='text-align:left;' ><code>name/YourName</code></td><td style='text-align:left;' >Registers or updates your display name. Must be a single word. Ex: <code>name/John</code></td></tr><tr><td style='text-align:left;' ><code>email/to/subj/body</code></td><td style='text-align:left;' >Sends an email. Ex: <code>email/friend@test.com/Mesh Msg/Hello from the field!</code></td></tr><tr><td style='text-align:left;' ><code>tagsend/tags/msg</code></td><td style='text-align:left;' >Sends a message to a tag group. Ex: <code>tagsend/CERT/Meeting at 5</code>. <em>Requires admin-granted permission.</em></td></tr><tr><td style='text-align:left;' ><code>SOS</code>, <code>SOSP</code>, <code>SOSF</code>, <code>SOSM</code></td><td style='text-align:left;' >Triggers an emergency alert (General, Police, Fire, Medical).</td></tr><tr><td style='text-align:left;' ><code>CLEAR</code>, <code>CANCEL</code>, <code>SAFE</code></td><td style='text-align:left;' >Clears your active emergency alert.</td></tr></tbody>
+</table></figure>
+<h3 id='authorized-user-guide-using-email-features'>Authorized User Guide (Using Email Features)</h3>
+<h4 id='sending-a-message-to-a-mesh-user-email-relay'>Sending a Message to a Mesh User (Email Relay)</h4>
+<p>To send a message from your email account to a specific user on the Meshtastic network, compose a new email and include the user's Node ID or registered name in the subject line.</p>
+<ul>
+<li><strong>To:</strong> <code>your-gateway-email@example.com</code></li>
+<li><strong>Subject:</strong> <code>For !a1b2c3d4, Meeting Update</code></li>
+<li>The body of your email will be delivered to the user.</li>
+</ul>
+<h4 id='sending-a-message-to-a-tag-group'>Sending a Message to a Tag Group</h4>
+<p>To send a message to a group of users based on their assigned tags, compose a new email with the word <code>Tag</code> followed by the tag names in the subject line.</p>
+<ul>
+<li><strong>To:</strong> <code>your-gateway-email@example.com</code></li>
+<li><strong>Subject:</strong> <code>Tag CERT MEDICAL</code></li>
+<li>The body of your email will be delivered to all users with either the <code>CERT</code> or <code>MEDICAL</code> tag. You will receive an email confirming that your message was relayed.</li>
+</ul>
+<h4 id='sending-a-network-wide-broadcast-admins-only'>Sending a Network-Wide Broadcast (Admins Only)</h4>
+<p>If you have been granted broadcast permission, you can send a message to all users on the network directly from your email client.</p>
+<ul>
+<li><strong>To:</strong> <code>your-gateway-email@example.com</code></li>
+<li><strong>Standard Broadcast Subject:</strong> <code>broadcast</code></li>
+<li><strong>Alert Broadcast Subject:</strong> <code>!broadcast</code> or <code>broadcast!</code> (This prepends an audible bell character to the message).</li>
+<li>The body of your email will be sent to every node. You will receive an email confirming that your broadcast was sent or informing you if you are not authorized.</li>
+</ul>
+<h2 id='8-system-architecture'>8. System Architecture</h2>
+<p>The system's stability comes from its modular design, where tasks are separated into distinct, independent scripts. The components communicate via a simple and robust file-based system centered around the <code>data/</code> directory. This prevents an error in one part of the system (like email fetching) from crashing another.</p>
+<ul>
+<li><strong><code>meshtastic_dispatcher.py</code></strong>: The core service that runs persistently. It listens for commands from users, sends messages, manages all scheduled broadcasts (weather, alerts, custom), and uses the <code>watchdog</code> library to instantly detect and process new command files. It also handles SOS alerts, requests location updates, and retries failed direct messages from a queue.</li>
+<li><strong><code>weather_fetcher.py</code></strong>: A cron job that fetches data from the NWS API (current conditions, forecasts, alerts) and saves it to JSON files in the <code>data/</code> directory for the dispatcher to read.</li>
+<li><strong><code>email_processor.py</code></strong>: A cron job that handles both sending and receiving emails. It reads outgoing requests from <code>outgoing_emails.json</code> and writes incoming messages as command files (<code>relay</code> or <code>broadcast</code>) for the dispatcher to process. It uses a 4-tier logic to find the intended mesh recipient.</li>
+<li><strong>Admin Panel (<code>map.php</code>)</strong>: The web interface. When an admin performs an action like sending a broadcast or a DM, the PHP script writes a small JSON file into the <code>data/commands/</code> directory.</li>
+<li><strong>The <code>data/</code> Directory</strong>: This folder acts as the central message queue between the web panel, the email processor, and the main dispatcher. The dispatcher is always "watching" this folder, so when a new command file or a change to <code>subscribers.json</code> appears, it immediately processes it. This ensures a decoupled but fully integrated control system.</li>
+</ul>
+<h2 id='9-file-structure'>9. File Structure</h2>
+<p>All files are located within the <code>/opt/GuardianBridge/</code> directory.</p>
+<pre><code>/opt/GuardianBridge/
+├── meshtastic_dispatcher.py # Main service, always running
+├── email_processor.py       # Handles email I/O (cron job)
+├── weather_fetcher.py       # Fetches NWS data (cron job)
+├── settings.py              # Loads settings from .env
+├── requirements.txt         # Python dependencies
+├── .env                     # User-specific secrets and settings
+└── data/                    # Directory for all runtime data
+    ├── subscribers.json     # List of users, their settings, assigned tags, and permissions
+    ├── outgoing_emails.json # Queue for emails to be sent
+    ├── failed_dm_queue.json # Queue for failed Direct Messages
+    ├── weather_current.json # Latest weather observation
+    ├── weather_forecast.txt # Latest multi-day forecast
+    ├── nws_alerts.txt       # Current active NWS alerts
+    ├── dispatcher.txt       # Schedule for custom broadcasts
+    ├── dispatcher_state.json# Stores last-sent times for broadcasts
+    ├── dispatcher_status.json# Health status for the web panel
+    ├── channel0_log.json    # Log of all chat messages for the web panel
+    ├── sos_log.json         # New file for SOS logging
+    ├── *.lastrun            # Files indicating cron jobs ran
+    └── commands/            # Folder for command files (the message bus)
+        └── error/           # Quarantined/malformed command files
+</code></pre>
+<h2 id='10-troubleshooting'>10. Troubleshooting</h2>
+<ul>
+<li><strong>Gateway is not responding</strong>: Check the service status with <code>sudo systemctl status guardianbridge.service</code>. Look at the logs with <code>journalctl -u guardianbridge.service -f</code> for errors. Ensure the Meshtastic device is powered and connected.</li>
+<li><strong>Weather is not updating</strong>: Run <code>python3 /opt/GuardianBridge/weather_fetcher.py</code> manually and check for errors. Check that the <code>data/weather_fetcher.lastrun</code> file has a recent timestamp. Ensure your <code>LATITUDE</code> and <code>LONGITUDE</code> in the <code>.env</code> file are correct.</li>
+<li><strong>Emails are not being sent/received</strong>: Run <code>python3 /opt/GuardianBridge/email_processor.py</code> manually. Check for authentication errors and ensure you are using a correct App Password for Gmail. Check the <code>data/email_processor.lastrun</code> file timestamp.</li>
+<li><strong>Broadcast email failed</strong>: If you receive a rejection email, check the <code>subscribers.json</code> file to ensure your email address is listed for a user and that their <code>"emailbroadcast": true</code> flag is set.</li>
+<li><strong>Admin Panel shows "failed to write" or "not readable" errors</strong>: This is almost always a file permissions issue. Ensure the web server user (<code>www-data</code>) has write access to the <code>/opt/GuardianBridge/</code> directory and its contents. Refer to the installation steps.</li>
+<li><strong>A user is blocked/unblocked, but it doesn't take effect</strong>: This can happen if the <code>watchdog</code> library isn't working correctly. Restart the dispatcher service (<code>sudo systemctl restart guardianbridge.service</code>) to force it to reload the <code>subscribers.json</code> file.</li>
+<li><strong>Settings changed in panel but not taking effect</strong>: You must restart the main dispatcher service after saving changes to the <code>.env</code> file: <code>sudo systemctl restart guardianbridge.service</code>.</li>
+<li><strong>SOS alert not clearing or not being received by responders</strong>: Verify the node's <code>sos</code> status in <code>node_status.json</code>. Ensure responders have the correct tags assigned in <code>subscribers.json</code>. Check dispatcher logs for errors during SOS processing or message sending. If an admin clear command was used, verify it was queued and processed in the <code>commands/</code> directory.</li>
+</ul>
+<h2 id='11-project-roadmap'>11. Project Roadmap</h2>
+<p>This project is in active development. Future enhancements being considered include:</p>
+<ul>
+<li><strong>Direct SAME/EAS Integration</strong>: Ingesting alert streams directly from NOAA Weather Radio broadcasts for ultimate redundancy, providing a layer of protection that does not depend on any internet connection.</li>
+<li><strong>Canned Status Messages</strong>: Implementing quick commands for users to broadcast their status (e.g., "I'm OK," "Need Assistance," "Have Supplies") for rapid community check-ins during an emergency.</li>
+</ul>
+
+<hr style="border-top: 3px solid #555; margin: 3rem 0;">
+
+<h1 id="deploy-title" style="font-size: 2.25rem; font-weight: bold; margin-top: 2rem;">Part 2: GuardianBridge Deployment Guide</h1>
+
+<h2 id='deploy-introduction'>Introduction</h2>
+<p>In times of severe weather, natural disasters, or infrastructure failure, our most basic systems—cellular networks, internet, and power—are often the first to disappear. This leaves communities disconnected and vulnerable. This document serves as a comprehensive guide to deploying a powerful, resilient communication hub to solve this very problem.</p>
+<p>By combining the decentralized, off-grid mesh networking capabilities of Meshtastic with the internet-bridging power of the GuardianBridge application set, any community can build and own an independent communication lifeline. This system ensures that even when all other systems are down, your community can stay informed, connected, and coordinated. It's more than just a tool; it's a pathway to technological sovereignty, empowering neighborhoods to support each other through any crisis.</p>
+<p>This guide provides the full technical and strategic analysis required for successful implementation, from high-level planning and hardware selection to step-by-step software configuration and user training. It is designed to be a complete reference for community leaders, technical administrators, and end-users alike.</p>
+<br>
+<h2 id='deploy-whats-new-with-the-latest-revision-4th-of-july-update-summary'>What's new with the latest revision? 4th of July Update Summary</h2>
+<p>GuardianBridge system has incorporated significant new features focused on emergency response, user management, and administrative interactivity. Here is a detailed breakdown of the new functionalities.</p>
+<h3 id='deploy-1-sos-emergency-alert-system'>1. SOS Emergency Alert System</h3>
+<p>A comprehensive SOS system has been integrated, allowing users in distress to signal for help and for administrators to manage the response.</p>
+<ul>
+<li><p><strong>User-Facing Functionality</strong>:</p>
+<ul>
+<li>Users can trigger an alert by sending a Direct Message to the gateway with specific commands: <code>SOS</code> (general emergency), <code>SOSP</code> (police), <code>SOSF</code> (fire), or <code>SOSM</code> (medical).</li>
+<li>To cancel an alert, the user can send <code>CLEAR</code>, <code>CANCEL</code>, or <code>SAFE</code>.</li>
+</ul>
+</li>
+<li><p><strong>Backend &amp; Automation</strong>:</p>
+<ul>
+<li>Upon receiving an SOS command, the <code>meshtastic_dispatcher.py</code> script immediately requests a fresh location update from the user's node to get the most accurate position.</li>
+<li>The system logs the event in a new persistent file, <code>sos_log.json</code>, for after-action review.</li>
+<li>The alert is automatically relayed as a high-priority Direct Message to all subscribed users who have a corresponding "responder" tag (e.g., users with the <code>SOSM</code> tag receive <code>SOSM</code> alerts). The relayed message includes the sender's name and their last known location with a map link.</li>
+<li>A user's active SOS status is recorded in the <code>node_status.json</code> file. This status persists even if the node goes offline, ensuring responders are aware of the last known state.</li>
+</ul>
+</li>
+<li><p><strong>Admin Panel Integration (<code>map.php</code>)</strong>:</p>
+<ul>
+<li><strong>Active SOS Banner</strong>: A flashing red banner appears at the top of the admin panel for any unacknowledged SOS alert, ensuring immediate visibility for the administrator.</li>
+<li><strong>Visual Map &amp; List Indicators</strong>: Nodes with an active SOS are marked with a distinct red icon on the map and are highlighted in the Live Node List.</li>
+<li><strong>SOS Log</strong>: The "Actions" tab now features an "SOS Alert Log" which displays a full history of all received alerts.</li>
+<li><strong>Remote Clearance</strong>: Administrators can remotely clear a user's active SOS alert using the "Admin Clear SOS" button. This sends a "STAND DOWN" message to all relevant responders and clears the user's SOS status, which is crucial if the user is unable to do so themselves.</li>
+</ul>
+</li>
+</ul>
+<h3 id='deploy-2-enhanced-user-and-group-management'>2. Enhanced User and Group Management</h3>
+<p>User management has evolved from simple subscriptions to a detailed contact and permissions system, enabling more sophisticated community organization.</p>
+<ul>
+<li><p><strong>Expanded User Profiles</strong>: Administrators can now manage extensive user profiles via the "Users" tab in the admin panel. New fields include:</p>
+<ul>
+<li>Full Name</li>
+<li>Multiple phone numbers</li>
+<li>Email address</li>
+<li>A complete physical address (street, city, state, zip)</li>
+<li>Free-form notes</li>
+</ul>
+</li>
+<li><p><strong>Fine-Grained Permissions</strong>: Admins can set specific boolean permissions for each user, including:</p>
+<ul>
+<li><code>email_send</code> and <code>email_receive</code>: Control over using the email gateway.</li>
+<li><code>emailbroadcast</code>: Permission to send network-wide broadcasts via email.</li>
+<li><code>node_tag_send</code>: Authority to send messages to tag groups directly from their Meshtastic node.</li>
+<li><code>blocked</code>: A master switch to completely ignore all commands from a specific user.</li>
+</ul>
+</li>
+<li><p><strong>Tag-Based Group Messaging</strong>: The tag system has been fully implemented.</p>
+<ul>
+<li><strong>From Email</strong>: Authorized users can send an email to the gateway with a subject like <code>Tag CERT MEDICAL</code>. The gateway relays the message to all users who have either the <code>CERT</code> or <code>MEDICAL</code> tag.</li>
+<li><strong>From Meshtastic Node</strong>: A user with the <code>node_tag_send</code> permission can send a message to a group from their device using the command: <code>tagsend/tag1 tag2/message</code>.</li>
+</ul>
+</li>
+<li><p><strong>Role Mismatch Troubleshooting</strong>: The "Users" tab now displays both the <em>assigned</em> role (configured by the admin) and the <em>live reported</em> role from the node's radio, highlighting any discrepancies in yellow. This is a key diagnostic tool for network stability.</p>
+</li>
+</ul>
+<h3 id='deploy-3-interactive-real-time-admin-panel'>3. Interactive, Real-Time Admin Panel</h3>
+<p>The <code>map.php</code> admin panel has been transformed into a dynamic, single-page application that provides real-time situational awareness without requiring page reloads.</p>
+<ul>
+<li><p><strong>Live Data Updates</strong>: The Status tab, including the map and node list, automatically refreshes every 5 seconds by fetching data from <code>api_get_nodes.php</code>.</p>
+</li>
+<li><p><strong>Live Chat Interface</strong>:</p>
+<ul>
+<li>The "Chat" tab now provides a live view of the network's traffic, polling <code>api_get_chat.php</code> for updates.</li>
+<li>It includes filters to selectively show or hide Direct Messages and system-generated server messages.</li>
+<li><strong>Direct Message Modal</strong>: Admins can click on any user's Node ID to open a dedicated DM chat window, allowing for private, real-time conversations directly from the admin panel.</li>
+</ul>
+</li>
+<li><p><strong>Offline Map Support</strong>: The system now includes a <code>map_tile_downloader.py</code> script. This utility allows an administrator to pre-download OpenStreetMap tiles for their operational area. The admin panel is configured to use these cached tiles, ensuring the map remains fully functional even if the gateway server loses its internet connection.</p>
+</li>
+</ul>
+<h3 id='deploy-4-improved-email-gateway-resilience-and-usability'>4. Improved Email Gateway Resilience and Usability</h3>
+<p>The email gateway has been made smarter and more user-friendly for external contacts.</p>
+<ul>
+<li><p><strong>4-Tier Recipient Parsing</strong>: The <code>email_processor.py</code> script uses a tiered logic to find the intended mesh recipient of an incoming email, dramatically improving reliability:</p>
+<ol>
+<li>Searches the email <strong>subject</strong> for a Node ID or user's registered name.</li>
+<li>If not found, searches the <strong>"To:" header</strong>.</li>
+<li>If not found, looks for a <strong>reply watermark</strong> left by a previous GuardianBridge email.</li>
+<li>As a last resort, it performs a generic scan of the <strong>email body</strong>.</li>
+</ol>
+</li>
+<li><p><strong>Alert Broadcast via Email</strong>: Authorized admins can send a broadcast with an audible alert by starting or ending the email subject with an exclamation mark (e.g., <code>!broadcast</code> or <code>broadcast!</code>).</p>
+</li>
+<li><p><strong>Professional Branding and Instructions</strong>: Emails sent <em>from</em> the mesh network to an external address now include a detailed header and footer. This footer explains where the message came from and provides clear, step-by-step instructions on how to correctly format a reply to ensure it gets delivered back to the mesh user.</p>
+</li>
+</ul>
+<hr />
+<h2 id='deploy-section-1-the-strategic-imperative-for-resilient-communications'>Section 1: The Strategic Imperative for Resilient Communications</h2>
+<h3 id='deploy-11-defining-meshtastic-beyond-a-simple-messenger'>1.1. Defining Meshtastic: Beyond a Simple Messenger</h3>
+<p>Meshtastic is an open-source, decentralized, and off-grid communication platform engineered to function in environments devoid of conventional infrastructure. At its core, the project leverages inexpensive, low-power hardware running the LoRa (Long Range) radio protocol to create self-healing, self-configuring mesh networks. It is crucial to understand that Meshtastic is not a substitute for the internet or cellular services; rather, it is a specialized tool for the transmission of low-bandwidth data, primarily text-based messages and Global Navigation Satellite System (GNSS) location coordinates. Its fundamental purpose is to provide a resilient communication layer when traditional systems are unavailable, unreliable, or compromised, such as during natural disasters, in remote wilderness areas, or in regions subject to internet censorship. This core functionality can be powerfully extended by gateway applications like GuardianBridge, which bridge the local, off-grid mesh to vital internet-based services, transforming it into a comprehensive information lifeline.</p>
+<p>A defining characteristic of the Meshtastic project is its 100% community-driven and open-source nature. This model fosters a global ecosystem of developers, hobbyists, and preparedness-minded individuals who contribute to the software, document best practices, and design new hardware. For a rural community, this is a significant advantage. Adopting Meshtastic is not merely purchasing a product from a vendor; it is joining a vibrant, collaborative community dedicated to building and maintaining independent communication capabilities. This fosters a culture of technological sovereignty and self-reliance, which aligns perfectly with the goals of community resilience.</p>
+<h3 id='deploy-12-core-principles-decentralization-lora-and-mesh-networking'>1.2. Core Principles: Decentralization, LoRa, and Mesh Networking</h3>
+<p>The resilience and effectiveness of Meshtastic are built upon three foundational technical principles: decentralization, the LoRa physical layer, and the mechanics of mesh networking.</p>
+<p><strong>Decentralization:</strong> Unlike cellular networks or many internet services, a Meshtastic network operates without any central server, gateway, or administrative authority. Each device, or "node," in the network is a peer, capable of originating, receiving, and relaying information. This peer-to-peer architecture is the source of its profound resilience. The failure of any single node, or even multiple nodes, does not bring down the entire network.</p>
+<p><strong>LoRa (Long Range) Physical Layer (PHY):</strong> Meshtastic is built upon the LoRa radio modulation technique, which is distinguished by its ability to achieve very long-range transmissions with extremely low power consumption. It operates in the Industrial, Scientific, and Medical (ISM) radio bands, which are unlicensed in most regions of the world, meaning individuals can operate a Meshtastic network without needing a government-issued license.</p>
+<p><strong>Mesh Networking Mechanics:</strong> Meshtastic uses a "store-and-forward" mesh protocol. When a user sends a message, their node broadcasts it, and any other nodes in range will intelligently rebroadcast it, extending the message's reach. To prevent messages from being rebroadcast endlessly, each packet contains a "hop limit" counter that is decremented at each rebroadcast.</p>
+<h3 id='deploy-13-suitability-for-rural-and-disaster-prone-environments'>1.3. Suitability for Rural and Disaster-Prone Environments</h3>
+<p>The synthesis of these principles makes Meshtastic an exceptionally suitable technology for establishing backup communications in rural and disaster-prone areas. Its independence from existing infrastructure is its primary asset. During storms, floods, wildfires, or earthquakes, power grids and cellular towers are often the first systems to fail. A Meshtastic network, powered by batteries or solar panels, remains fully operational, providing a vital lifeline for community coordination. This inherent resilience is further magnified when paired with a gateway solution like GuardianBridge.</p>
+<h3 id='deploy-14-introducing-guardianbridge-the-information-lifeline'>1.4. Introducing GuardianBridge: The Information Lifeline</h3>
+<p>GuardianBridge is a complete, self-contained communication gateway system that leverages the power of Meshtastic to create an independent, resilient communication network that your community builds and owns.</p>
+<p>It provides a rich set of automated and on-demand features:</p>
+<ul>
+<li><strong>Automated Weather &amp; Forecasts</strong>: Receive periodic updates on current weather conditions and scheduled daily forecasts.</li>
+<li><strong>Critical NWS Alerts</strong>: Get timely, automated alerts from the National Weather Service for severe events.</li>
+<li><strong>Two-Way Email Gateway</strong>: Send and receive emails from the mesh network.</li>
+<li><strong>Email-Based Broadcasts</strong>: Authorized administrators can send network-wide broadcast messages via email.</li>
+<li><strong>Tag-Based Group Messaging</strong>: Create logical groups (e.g., <code>CERT</code>, <code>MEDICAL</code>) for targeted messages.</li>
+<li><strong>Flexible Scheduled Broadcasts</strong>: Configure custom, recurring messages or one-time announcements.</li>
+<li><strong>User Self-Service</strong>: Users can manage their subscriptions and settings via direct messages to the gateway.</li>
+<li><strong>SOS Emergency Alert System</strong>: Users can trigger an alert (general, police, fire, medical) and admins can manage the response, including remote clearance.</li>
+<li><strong>Satellite-Resilient</strong>: When connected to satellite internet, the gateway remains resilient to local terrestrial infrastructure damage, as satellite internet often stays online when cable and cellular go dark.</li>
+</ul>
+<hr />
+<h2 id='deploy-section-2-designing-your-network-hardware-and-placement'>Section 2: Designing Your Network: Hardware and Placement</h2>
+<h3 id='deploy-21-the-meshtastic-hardware-ecosystem-core-components'>2.1. The Meshtastic Hardware Ecosystem: Core Components</h3>
+<p>A Meshtastic node is an assembly of key electronic components. The <strong>Micro-Controller Unit (MCU)</strong> acts as the device's "brain," running the firmware; the most common are from the ESP32 and nRF52 families. The second critical component is the <strong>LoRa radio chip</strong>, the transceiver for sending and receiving radio packets; newer Semtech <strong>SX126x</strong> series chips are recommended over the older <strong>SX127x</strong> series for their superior performance and reliability. Finally, nodes can have various <strong>peripherals</strong> like GNSS receivers, screens, battery holders, and expansion ports for sensors.</p>
+<h3 id='deploy-22-the-nrf52-vs-esp32-trade-off-power-efficiency-vs-connectivity'>2.2. The nRF52 vs. ESP32 Trade-off: Power Efficiency vs. Connectivity</h3>
+<p>The choice of MCU typically boils down to a trade-off between the nRF52 and the ESP32 platforms.</p>
+<ul>
+<li><strong>ESP32-based devices:</strong> While having higher power consumption, their key advantage is the inclusion of both Bluetooth and <strong>onboard WiFi connectivity</strong>. This makes them the mandatory choice for any node functioning as an internet gateway or for base stations where web interface access is desired.</li>
+<li><strong>nRF52-based devices:</strong> These are much newer and more power-efficient, making them the superior choice for mobile handhelds and, most importantly, solar-powered repeater nodes designed for long-duration, unattended deployment.</li>
+</ul>
+<h3 id='deploy-23-hardware-recommendations-for-specific-roles'>2.3. Hardware Recommendations for Specific Roles</h3>
+<ul>
+<li><strong>Mobile Handsets for Field Teams:</strong> Integrated, ready-to-use devices like the <strong>LILYGO T-Echo</strong> and <strong>Seeed Studio T1000-E Card Tracker</strong> are ideal. Both are based on the power-efficient nRF52 MCU and lower the barrier to entry for non-technical users.</li>
+<li><strong>Fixed-Location Base Stations:</strong> For nodes with constant power, affordable ESP32-based boards like the <strong>Heltec WiFi LoRa 32 V3</strong> or the <strong>LILYGO T-Beam</strong> are excellent choices.</li>
+<li><strong>Solar-Powered Repeater Nodes:</strong> The <strong>RAKwireless WisBlock</strong> modular system is widely considered the best choice for this role, based on the power-efficient nRF52 and allowing for easy integration with solar charge controllers and batteries.</li>
+<li><strong>GuardianBridge Gateway Node:</strong> Since the GuardianBridge software runs on a separate computer (like a Raspberry Pi), the connected node itself does not require WiFi. A simple, reliable board like a <strong>Heltec WiFi LoRa 32 V3</strong> or a <strong>RAK WisBlock</strong> node is an excellent choice.</li>
+</ul>
+<h4 id='deploy-table-1-comparative-analysis-of-recommended-meshtastic-hardware'>Table 1: Comparative Analysis of Recommended Meshtastic Hardware</h4>
+<figure class='table-figure'><table>
+<thead>
+<tr><th style='text-align:left;' >Device Name</th><th style='text-align:left;' >MCU (Implication)</th><th style='text-align:left;' >Ideal Use Case</th><th style='text-align:left;' >Key Features</th><th style='text-align:left;' >Approx. Cost (USD)</th><th style='text-align:left;' >Pros</th><th style='text-align:left;' >Cons</th></tr></thead>
+<tbody><tr><td style='text-align:left;' ><strong>LILYGO T-Echo</strong></td><td style='text-align:left;' >nRF52840 (Low Power)</td><td style='text-align:left;' >Mobile Handset</td><td style='text-align:left;' >GPS, E-Ink Screen, Case, Battery</td><td style='text-align:left;' >$75</td><td style='text-align:left;' >All-in-one, excellent battery life, sunlight-readable screen, ready-to-use.</td><td style='text-align:left;' >Higher cost, no WiFi.</td></tr><tr><td style='text-align:left;' ><strong>RAK WisBlock Starter Kit</strong></td><td style='text-align:left;' >nRF52840 (Low Power)</td><td style='text-align:left;' >Solar Repeater, DIY</td><td style='text-align:left;' >Modular, GPS/Sensor Add-ons</td><td style='text-align:left;' >$35</td><td style='text-align:left;' >Extremely power efficient, highly expandable, best for solar, future-proof.</td><td style='text-align:left;' >Requires assembly, case/battery are separate purchases.</td></tr><tr><td style='text-align:left;' ><strong>Heltec WiFi LoRa 32 V3</strong></td><td style='text-align:left;' >ESP32-S3 (WiFi)</td><td style='text-align:left;' >Base Station</td><td style='text-align:left;' >WiFi, OLED Screen</td><td style='text-align:left;' >$25</td><td style='text-align:left;' >Very affordable, has WiFi for web UI access, good community support.</td><td style='text-align:left;' >Poor battery life, not ideal for portable use.</td></tr><tr><td style='text-align:left;' ><strong>LILYGO T-Beam</strong></td><td style='text-align:left;' >ESP32 (WiFi)</td><td style='text-align:left;' >Vehicle Node, Base Station</td><td style='text-align:left;' >GPS, WiFi, 18650 Battery Holder</td><td style='text-align:left;' >$45</td><td style='text-align:left;' >Feature-packed for the price, integrated battery holder, wide user base.</td><td style='text-align:left;' >Higher power consumption than nRF52, requires separate 18650 battery.</td></tr><tr><td style='text-align:left;' ><strong>Heltec V3 / RAK WisBlock</strong></td><td style='text-align:left;' >ESP32 / nRF52</td><td style='text-align:left;' >GuardianBridge Gateway Node</td><td style='text-align:left;' >Stable USB serial connection</td><td style='text-align:left;' >$25-$35</td><td style='text-align:left;' >Reliable, low-power options for connecting to a host computer.</td><td style='text-align:left;' >Requires separate host computer for gateway software and internet.</td></tr></tbody>
+</table></figure>
+<h3 id='deploy-24-antenna-theory-and-selection-for-optimal-performance'>2.4. Antenna Theory and Selection for Optimal Performance</h3>
+<p>Upgrading the stock antenna is one of the most cost-effective ways to significantly improve network range and reliability.</p>
+<ul>
+<li><strong>Gain:</strong> For fixed stations, a higher-gain (e.g., 5.8 dBi) omnidirectional antenna is beneficial. For mobile nodes, a lower-gain, more flexible antenna is more practical.</li>
+<li><strong>Orientation:</strong> LoRa antennas should almost always be oriented vertically.</li>
+<li><strong>Placement:</strong> Place the antenna as high as possible and clear of obstructions.</li>
+</ul>
+<p>A critical safety protocol is to <strong>never power on a Meshtastic device without a compatible antenna securely attached</strong>, as this can permanently damage the radio chip.</p>
+<h3 id='deploy-25-the-physics-of-lora-maximizing-range-with-line-of-sight-and-height'>2.5. The Physics of LoRa: Maximizing Range with Line-of-Sight and Height</h3>
+<p>The single most important factor determining range is <strong>line-of-sight (LoS)</strong> between nodes. Any significant physical obstruction, like hills or large buildings, will severely attenuate the signal. Consequently, the most effective way to increase range is to increase <strong>height</strong>. Placing a node on a hilltop or tall building can extend its communication horizon from a few kilometers to tens or even hundreds of kilometers.</p>
+<h3 id='deploy-26-planning-coverage-with-the-meshtastic-site-planner'>2.6. Planning Coverage with the Meshtastic Site Planner</h3>
+<p>The Meshtastic project provides a powerful, open-source tool that transforms network planning into a data-driven process: the <strong>Meshtastic Site Planner</strong>. This web-based application allows users to run sophisticated and accurate predictions of their device's potential radio coverage by integrating propagation models with global terrain data. By simulating various potential repeater locations, a community can strategically place a minimum number of nodes to achieve maximum coverage, effectively "painting" their entire area with a reliable signal.</p>
+<hr />
+<h2 id='deploy-section-3-building-your-network-strategy-and-best-practices'>Section 3: Building Your Network: Strategy and Best Practices</h2>
+<h3 id='deploy-31-phased-implementation-roadmap'>3.1. Phased Implementation Roadmap</h3>
+<p>A structured, phased approach is recommended for a successful deployment.</p>
+<ol>
+<li><strong>Phase 1: Core Group Formation and Technology Familiarization.</strong> A small, technically-inclined group should learn the technology hands-on, flash firmware, configure nodes, and establish a private, encrypted channel for testing.</li>
+<li><strong>Phase 2: Network Backbone and GuardianBridge Gateway Deployment.</strong> Using the Meshtastic Site Planner, the core team will identify strategic high-elevation locations for <code>ROUTER</code> nodes and deploy them. Concurrently, they will set up the GuardianBridge gateway on a Raspberry Pi or similar computer.</li>
+<li><strong>Phase 3: Community Onboarding and Education.</strong> With the backbone in place, the focus shifts to growing the user base by recommending simple "starter kit" devices and holding workshops on usage and network etiquette, especially the mandatory use of the <code>CLIENT_MUTE</code> role for mobile nodes.</li>
+<li><strong>Phase 4: Advanced Disaster Response Coordination.</strong> For formal response teams, this phase involves leveraging GuardianBridge's advanced features like user tags (<code>MEDICAL</code>, <code>SEARCH</code>) and training leaders on the tag-based group messaging and broadcast features.</li>
+</ol>
+<h3 id='deploy-32-best-practices-for-physical-installation'>3.2. Best Practices for Physical Installation</h3>
+<ul>
+<li><strong>Weatherproofing:</strong> Outdoor nodes must be protected in high-quality, IP-rated waterproof enclosures (e.g., IP65 or IP67), with all cable entry points sealed.</li>
+<li><strong>Powering:</strong> Solar repeaters require a carefully matched system of a solar panel, charge controller, and a battery large enough to power the node through several cloudy days.</li>
+<li><strong>Mounting:</strong> The enclosure should be securely mounted to a pole or mast, with the antenna mounted externally, as high as possible, and with a clear vertical orientation.</li>
+</ul>
+<h3 id='deploy-33-crucial-pre-configuration-concepts'>3.3. Crucial Pre-Configuration Concepts</h3>
+<h4 id='deploy-331-a-deep-dive-into-node-roles-the-key-to-a-stable-mesh'>3.3.1. A Deep Dive into Node Roles: The Key to a Stable Mesh</h4>
+<p>A stable and efficient Meshtastic network is a deliberately designed, tiered system where different nodes are configured with specific roles. Misconfiguration of roles is a leading cause of network congestion.</p>
+<ul>
+<li><strong><code>CLIENT</code> (Default Role):</strong> Suitable for most fixed-location nodes, like a device at a home or office. It sends and receives messages and intelligently rebroadcasts packets it hears.</li>
+<li><strong><code>CLIENT_MUTE</code>:</strong> Critically important for any node that is <strong>mobile</strong>. A <code>CLIENT_MUTE</code> node can send and receive messages, but it <strong>does not rebroadcast packets</strong> from other nodes, which is essential to prevent network instability caused by a moving routing point.</li>
+<li><strong><code>ROUTER</code> / <code>REPEATER</code>:</strong> Specialized roles intended only for strategically placed, permanently powered backbone nodes at high-elevation points with excellent LoS. The firmware prioritizes rebroadcasts from these nodes to ensure messages are routed efficiently across long distances.</li>
+</ul>
+<h4 id='deploy-table-2-meshtastic-node-role-decision-matrix'>Table 2: Meshtastic Node Role Decision Matrix</h4>
+<figure class='table-figure'><table>
+<thead>
+<tr><th style='text-align:left;' >Scenario Description</th><th style='text-align:left;' >Recommended Role</th><th style='text-align:left;' >Rationale / Key Considerations</th></tr></thead>
+<tbody><tr><td style='text-align:left;' >Permanently-mounted solar node on a mountain with wide LoS, serving as network backbone.</td><td style='text-align:left;' ><code>ROUTER</code></td><td style='text-align:left;' >The node is strategically placed for maximum coverage and should be prioritized for rebroadcasting.</td></tr><tr><td style='text-align:left;' >Node installed in a car or truck for communication while driving.</td><td style='text-align:left;' ><code>CLIENT_MUTE</code></td><td style='text-align:left;' >The node is mobile. To prevent network instability, it must not rebroadcast others' packets.</td></tr><tr><td style='text-align:left;' >Handheld node used for hiking, search and rescue, or fieldwork.</td><td style='text-align:left;' ><code>CLIENT_MUTE</code></td><td style='text-align:left;' >Same as the vehicle node. The device is mobile and should not act as a router.</td></tr><tr><td style='text-align:left;' >Fixed node at a house in a valley with limited LoS.</td><td style='text-align:left;' ><code>CLIENT</code></td><td style='text-align:left;' >The node is a network endpoint and should participate in the mesh but is not a high-priority router.</td></tr><tr><td style='text-align:left;' >Fixed node at a house on a hill with good LoS over the local town.</td><td style='text-align:left;' ><code>CLIENT</code></td><td style='text-align:left;' >Unless it is part of the planned backbone, <code>CLIENT</code> is the safer choice.</td></tr></tbody>
+</table></figure>
+<h4 id='deploy-332-mastering-lora-settings-modem-presets-hops-and-regional-compliance'>3.3.2. Mastering LoRa Settings: Modem Presets, Hops, and Regional Compliance</h4>
+<p>All nodes that wish to communicate must share the same LoRa settings.</p>
+<ul>
+<li><strong>Region:</strong> Must be set to the legal region for the country of operation (e.g., <code>US</code>, <code>EU_868</code>).</li>
+<li><strong>Modem Presets:</strong> These offer a trade-off between speed and range. For most meshes, the default <strong><code>LONG_FAST</code></strong> provides an excellent balance. A faster setting like <code>MEDIUM_FAST</code> dramatically increases network capacity and is the best choice for a reliable alert system.</li><li><strong>Max Hops:</strong> Defines how many times a packet can be rebroadcast. The default of <strong>3</strong> is sufficient for most networks; increasing it unnecessarily can lead to significant congestion.</li>
+</ul>
+<h4 id='deploy-table-3-lora-modem-preset-characteristics-and-recommendations'>Table 3: LoRa Modem Preset Characteristics and Recommendations</h4>
+<figure class='table-figure'><table>
+<thead>
+<tr><th style='text-align:left;' >Preset Name</th><th style='text-align:left;' >Relative Range</th><th style='text-align:left;' >Relative Speed</th><th style='text-align:left;' >Airtime Usage</th><th style='text-align:left;' >Recommended Use Case</th></tr></thead>
+<tbody><tr><td style='text-align:left;' ><code>SHORT_TURBO</code></td><td style='text-align:left;' >Shortest</td><td style='text-align:left;' >Fastest</td><td style='text-align:left;' >Lowest</td><td style='text-align:left;' >High-density event networks; may not be legal in all regions.</td></tr><tr><td style='text-align:left;' ><code>SHORT_FAST</code> / <code>ShortSlow</code></td><td style='text-align:left;' >Short</td><td style='text-align:left;' >Very Fast</td><td style='text-align:left;' >Very Low</td><td style='text-align:left;' >Dense urban meshes where range is less important than minimizing congestion. The best choice for networks with very high user counts.</td></tr><tr><td style='text-align:left;' ><strong><code>MEDIUM_FAST</code></strong></td><td style='text-align:left;' ><strong>Medium</strong></td><td style='text-align:left;' ><strong>Medium</strong></td><td style='text-align:left;' ><strong>Medium</strong></td><td style='text-align:left;' ><strong>The recommended setting for GuardianBridge.</strong> Offers 3-4x the capacity of <code>LongFast</code>, drastically reducing congestion risk while maintaining excellent range.</td></tr><tr><td style='text-align:left;' ><code>LONG_FAST</code> (Default)</td><td style='text-align:left;' >Long</td><td style='text-align:left;' >Fast</td><td style='text-align:left;' >Low</td><td style='text-align:left;' >Suitable for small, general-purpose meshes, but can become congested easily.</td></tr><tr><td style='text-align:left;' ><code>LONG_SLOW</code> / <code>VeryLongSlow</code></td><td style='text-align:left;' >Longest</td><td style='text-align:left;' >Slowest</td><td style='text-align:left;' >Highest</td><td style='text-align:left;' >Not recommended for mesh networking; can cause significant congestion and unreliability.</td></tr></tbody>
+</table></figure>
+<h4 id='deploy-333-channel-management-creating-secure-private-communication-groups'>3.3.3. Channel Management: Creating Secure, Private Communication Groups</h4>
+<p>Security and message segregation are managed through <strong>Channels</strong>. Each channel is defined by a <strong>Name</strong> and a <strong>Pre-Shared Key (PSK)</strong>, and all messages on that channel are encrypted using AES-256. By default, devices use a public channel with a weak, known key. To create a private network, administrators must change the <code>PRIMARY</code> channel's name and set the PSK to <strong>"random"</strong> to generate a new, secure key. This new channel configuration can then be shared with trusted members via a QR code or URL.</p>
+<hr />
+<h2 id='deploy-section-4-advanced-network-optimization--congestion-management'>Section 4: Advanced Network Optimization &amp; Congestion Management</h2>
+<h3 id='deploy-41-understanding-airtime-saturation-and-congestion'>4.1. Understanding Airtime Saturation and Congestion</h3>
+<p>The LoRa radio channel is a shared, finite resource. When the percentage of time the channel is occupied by transmissions—known as <strong>channel utilization</strong>—becomes too high (empirically, above ~50%), the probability of packet collisions increases dramatically. Collisions lead to lost messages, which trigger retransmission attempts, further increasing utilization and creating a vicious cycle of congestion that can lead to network failure. Real-world events have shown that networks on default settings can crash under heavy load, while aggressively optimized networks can support thousands of nodes. This demonstrates that for a reliable alert system, <strong>your #1 enemy is network congestion, not range</strong>.</p>
+<h3 id='deploy-42-the-nodedb-limitation-and-guardianbridges-mitigation-strategy'>4.2. The <code>nodedb</code> Limitation and GuardianBridge's Mitigation Strategy</h3>
+<p>A critical and often overlooked constraint is the firmware's internal node database, or <code>nodedb</code>. Each device can only store information about a finite number of other nodes it has recently heard from—typically <strong>80 nodes for nRF52 devices and 100 for ESP32 devices</strong>. When this limit is exceeded, the firmware uses a First-In, First-Out (FIFO) policy, purging the entry for the node that has been inactive the longest to make room for a new one.</p>
+<p>This presents a serious vulnerability for an alert system reliant on Direct Messages (DMs). If a quiet subscriber has not transmitted in a while, they can be purged from the gateway's <code>nodedb</code>. An attempt by the gateway to send a DM alert to this "forgotten" node will fail, as the gateway no longer has the necessary routing information. This introduces unpredictable and potentially severe latency.</p>
+<p>The GuardianBridge <code>meshtastic_dispatcher.py</code> script has a built-in mechanism to mitigate this.</p>
+<ul>
+<li><strong>Queuing Failed Messages:</strong> When the dispatcher fails to send a message to a specific destination, it does not discard it. Instead, it saves the message to a persistent queue file (<code>failed_dm_queue.json</code>).</li>
+<li><strong>Automatic Retry on Contact:</strong> When the previously unreachable user's node finally transmits any message and is heard by the gateway, the dispatcher is notified. It immediately checks the failed DM queue for any pending messages for that specific user and attempts to re-send them.</li>
+</ul>
+<p>While this does not prevent the initial failure, it creates a resilient, automated retry system, ensuring that alerts are eventually delivered once the user's node comes back into contact with the mesh.</p>
+<h3 id='deploy-43-advanced-recommendation-network-isolation'>4.3. Advanced Recommendation: Network Isolation</h3>
+<p>For maximum reliability, the entire GuardianBridge network should be physically isolated from public Meshtastic traffic. This is achieved by setting a specific, non-default LoRa frequency slot for the network. By default, the frequency is determined by the channel name, but for absolute certainty, a specific frequency slot can be manually configured on all nodes. This ensures that the only traffic on your channel is from your own system, eliminating all external interference and competition for airtime.</p>
+<hr />
+<h2 id='deploy-section-5-using-and-managing-the-guardianbridge-network'>Section 5: Using and Managing the GuardianBridge Network</h2>
+<h3 id='deploy-51-the-guardianbridge-admin-panel'>5.1. The GuardianBridge Admin Panel</h3>
+<p>The Admin Panel (<code>map.php</code>) is a comprehensive, web-based UI for managing and monitoring the system.</p>
+<ul>
+<li><strong>Status Tab</strong>: Your main dashboard for monitoring gateway health, service status, radio connection, and cron job status. It features a live map and node list that automatically refreshes every 5 seconds by fetching data from <code>api_get_nodes.php</code>. Nodes with an active SOS are highlighted with a distinct red icon on the map and in the node list.</li>
+<li><strong>Chat Tab</strong>: Provides a real-time interface for monitoring and participating in mesh conversations, polling <code>api_get_chat.php</code> for updates. It includes filters to selectively show or hide Direct Messages and system-generated server messages. Admins can click on any user's Node ID to open a dedicated DM chat window, allowing for private, real-time conversations.</li>
+<li><strong>Actions Tab</strong>: Allows manual tasks like forcing an immediate weather fetch, processing emails, or clearing the outgoing email queue. The "SOS Alert Log" displays a full history of all received alerts, and administrators can remotely clear an active SOS using the "Admin Clear SOS" button.</li>
+<li><strong>Broadcasts Tab</strong>: A powerful interface for managing custom, automated messages, including recurring jobs (e.g., daily announcements) and one-time, date-based events.</li>
+<li><strong>Users Tab</strong>: Provides full control over subscribers, including editing names, full names, phone numbers, email, addresses, and notes. You can toggle individual subscriptions (alerts, weather, forecast) and manage advanced permissions (email send/receive/broadcast, node tag send). You can also manage assigned tags and set a "blocked" status to ignore all commands from a specific user. The tab displays both the assigned role and the live reported role from the node's radio, highlighting any discrepancies.</li>
+<li><strong>Settings Tab</strong>: Allows for easy editing of the system's core <code>.env</code> configuration file for things like GPS coordinates, email credentials, and broadcast intervals. <strong>A dispatcher restart is required for these changes to take effect</strong>.</li>
+<li><strong>Help/About Tab</strong>: Contains system documentation and version information.</li>
+</ul>
+<h3 id='deploy-52-end-user-guide-interacting-via-meshtastic'>5.2. End-User Guide (Interacting via Meshtastic)</h3>
+<p>Interact with the GuardianBridge gateway by sending it Direct Messages from your Meshtastic device.</p>
+<h4 id='deploy-subscription--status-commands-2'>Subscription &amp; Status Commands</h4>
+<figure class='table-figure'><table>
+<thead>
+<tr><th style='text-align:left;' >Command</th><th style='text-align:left;' >Description</th></tr></thead>
+<tbody><tr><td style='text-align:left;' ><code>help</code></td><td style='text-align:left;' >Shows a list of available commands.</td></tr><tr><td style='text-align:left;' ><code>subscribe</code></td><td style='text-align:left;' >Subscribes you to all automated broadcasts.</td></tr><tr><td style='text-align:left;' ><code>unsubscribe</code></td><td style='text-align:left;' >Unsubscribes you from all broadcasts.</td></tr><tr><td style='text-align:left;' ><code>status</code></td><td style='text-align:left;' >Shows your current name, subscription settings, and assigned tags.</td></tr><tr><td style='text-align:left;' ><code>alerts on/off</code></td><td style='text-align:left;' >Toggles NWS weather alerts.</td></tr><tr><td style='text-align:left;' ><code>weather on/off</code></td><td style='text-align:left;' >Toggles periodic current weather updates.</td></tr><tr><td style='text-align:left;' ><code>forecasts on/off</code></td><td style='text-align:left;' >Toggles scheduled daily forecasts.</td></tr></tbody>
+</table></figure>
+<h4 id='deploy-on-demand-group--email-commands-2'>On-Demand, Group &amp; Email Commands</h4>
+<figure class='table-figure'><table>
+<thead>
+<tr><th style='text-align:left;' >Command</th><th style='text-align:left;' >Description</th></tr></thead>
+<tbody><tr><td style='text-align:left;' ><code>?</code></td><td style='text-align:left;' >Instantly fetches the current or next upcoming forecast.</td></tr><tr><td style='text-align:left;' ><code>name/YourName</code></td><td style='text-align:left;' >Registers or updates your display name. Must be a single word. Ex: <code>name/John</code>.</td></tr><tr><td style='text-align:left;' ><code>email/to/subj/body</code></td><td style='text-align:left;' >Sends an email. Ex: <code>email/friend@test.com/Mesh Msg/Hello from the field!</code>.</td></tr><tr><td style='text-align:left;' ><code>tagsend/tags/msg</code></td><td style='text-align:left;' >Sends a message to a tag group. Ex: <code>tagsend/CERT/Meeting at 5</code>. <em>Requires admin-granted permission.</em></td></tr><tr><td style='text-align:left;' ><code>SOS</code>, <code>SOSP</code>, <code>SOSF</code>, <code>SOSM</code></td><td style='text-align:left;' >Triggers an emergency alert (General, Police, Fire, Medical).</td></tr><tr><td style='text-align:left;' ><code>CLEAR</code>, <code>CANCEL</code>, <code>SAFE</code></td><td style='text-align:left;' >Clears your active emergency alert.</td></tr></tbody>
+</table></figure>
+<h3 id='deploy-53-authorized-user-guide-using-email-features'>5.3. Authorized User Guide (Using Email Features)</h3>
+<h4 id='deploy-sending-a-message-to-a-mesh-user-email-relay-2'>Sending a Message to a Mesh User (Email Relay)</h4>
+<p>Compose a new email to the gateway's address. Include the user's Node ID (e.g., <code>!a1b2c3d4</code>) or registered name in the subject line. The body of your email will be delivered to the user.</p>
+<h4 id='deploy-sending-a-message-to-a-tag-group-2'>Sending a Message to a Tag Group</h4>
+<p>Compose a new email to the gateway's address with the word <code>Tag</code> followed by the tag names in the subject line (e.g., <code>Tag CERT MEDICAL</code>). The body of your email will be delivered to all users with either of those tags.</p>
+<h4 id='deploy-sending-a-network-wide-broadcast-admins-only-2'>Sending a Network-Wide Broadcast (Admins Only)</h4>
+<p>If you have broadcast permission, send an email to the gateway address with the subject <code>broadcast</code> for a standard broadcast or <code>!broadcast</code> or <code>broadcast!</code> for an audible alert broadcast.</p>
+<h3 id='deploy-54-use-cases-for-community-resilience'>5.4. Use Cases for Community Resilience</h3>
+<ul>
+<li><strong>Extending Lifeline Communications via Email:</strong> By bridging to the internet (especially a resilient source like satellite), GuardianBridge provides a critical link for external contact when local infrastructure fails.</li>
+<li><strong>Coordinated Disaster Response:</strong> The tag-based messaging feature allows a command post to communicate directly with specific groups like MEDICAL or SEARCH_AND_RESCUE without cluttering the main channel.</li>
+<li><strong>Disseminating Automated Severe Weather Warnings:</strong> The gateway's ability to automatically fetch and broadcast NWS alerts ensures that community members receive timely, authoritative warnings directly on their devices.</li>
+<li><strong>Fostering a Hybrid Communication Ecosystem:</strong> GuardianBridge combines the strengths of Meshtastic—low cost, ease of use, and secure local communications—with the global reach of internet services and the authority of NWS data feeds.</li>
+</ul>
+<hr />
+<h2 id='deploy-section-6-advanced-system-administration'>Section 6: Advanced System Administration</h2>
+<h3 id='deploy-61-guardianbridge-system-philosophy-and-architecture'>6.1. GuardianBridge System Philosophy and Architecture</h3>
+<p>The project is built on three core principles: <strong>Resilience over Speed</strong>, <strong>Modularity and Simplicity</strong>, and <strong>Efficiency for Low-Power Devices</strong>. Its stability comes from a modular design where independent scripts communicate via a robust file-based system in the <code>data/</code> directory, preventing an error in one component from crashing another.</p>
+<ul>
+<li><strong><code>meshtastic_dispatcher.py</code></strong>: The core, persistent service that listens for commands, sends messages, and manages broadcasts. It uses the <code>watchdog</code> library to instantly process command files. It also handles SOS alerts, requests location updates, and retries failed direct messages from a queue.</li>
+<li><strong><code>weather_fetcher.py</code></strong>: A cron job that fetches NWS data and saves it to local JSON files.</li>
+<li><strong><code>email_processor.py</code></strong>: A cron job that handles sending and receiving emails. It reads from <code>outgoing_emails.json</code> and writes incoming messages as command files to the <code>data/commands/</code> directory for the dispatcher. It uses a 4-tier logic to find the intended mesh recipient (subject, "To:" header, reply watermark, generic body scan).</li>
+<li><strong>Admin Panel (<code>map.php</code>)</strong>: The web UI that acts as a control surface, writing command files into the <code>data/commands/</code> directory for the dispatcher to process instantly. This decouples the web interface from the core radio service.</li>
+</ul>
+<h3 id='deploy-62-advanced-security-remote-administration-and-managed-mode'>6.2. Advanced Security: Remote Administration and Managed Mode</h3>
+<ul>
+<li><strong>Remote Administration:</strong> Allows a designated administrator to securely change the configuration of any other node on the mesh from anywhere in the network using public-key cryptography. This is an indispensable tool for maintaining remote repeaters.</li>
+<li><strong>Managed Mode:</strong> A security setting that "locks down" a node so its configuration can no longer be modified by a locally connected app, only via authenticated Remote Administration. This is a crucial governance feature for critical infrastructure nodes.</li>
+</ul>
+<h3 id='deploy-63-power-management-strategies-for-long-duration-off-grid-nodes'>6.3. Power Management Strategies for Long-Duration Off-Grid Nodes</h3>
+<p>The most impactful setting is <code>is_power_saving</code>, which aggressively conserves energy by shutting down power-hungry components like Bluetooth and the screen after inactivity. This is essential for solar repeaters. The firmware also has intelligent, role-based power-saving behaviors, for example, a node in the <code>ROUTER</code> or <code>TRACKER</code> role will automatically optimize its power consumption for its specific task.</p>
+<h3 id='deploy-64-troubleshooting-guide'>6.4. Troubleshooting Guide</h3>
+<ul>
+<li><strong>Gateway is not responding</strong>: Check the service status with <code>sudo systemctl status guardianbridge.service</code> and logs with <code>journalctl -u guardianbridge.service -f</code>.</li>
+<li><strong>Weather is not updating</strong>: Run <code>python3 /opt/GuardianBridge/weather_fetcher.py</code> manually and check for errors. Ensure your GPS coordinates in the <code>.env</code> file are correct.</li>
+<li><strong>Emails are not being sent/received</strong>: Run <code>python3 /opt/GuardianBridge/email_processor.py</code> manually. Check for authentication errors and ensure you are using a correct App Password for Gmail.</li>
+<li><strong>Admin Panel shows "failed to write" or "not readable" errors</strong>: This is almost always a file permissions issue. Ensure the web server user (<code>www-data</code>) has write access to the <code>/opt/GuardianBridge/</code> directory and its contents.</li>
+<li><strong>Settings changed in panel but not taking effect</strong>: You must restart the main dispatcher service after saving changes to the <code>.env</code> file: <code>sudo systemctl restart guardianbridge.service</code>.</li>
+<li><strong>A user is blocked/unblocked, but it doesn't take effect</strong>: This can happen if the <code>watchdog</code> library isn't working correctly. Restart the dispatcher service (<code>sudo systemctl restart guardianbridge.service</code>) to force it to reload the <code>subscribers.json</code> file.</li>
+<li><strong>SOS alert not clearing or not being received by responders</strong>: Verify the node's <code>sos</code> status in <code>node_status.json</code>. Ensure responders have the correct tags assigned in <code>subscribers.json</code>. Check dispatcher logs for errors during SOS processing or message sending. If an admin clear command was used, verify it was queued and processed in the <code>commands/</code> directory.</li>
+</ul>
+<h3 id='deploy-65-guardianbridge-file-structure'>6.5. GuardianBridge File Structure</h3>
+<p>All files are located within the <code>/opt/GuardianBridge/</code> directory.</p>
+<pre><code>
+/opt/GuardianBridge/
+├── meshtastic_dispatcher.py # Main service, always running
+├── email_processor.py       # Handles email I/O (cron job)
+├── weather_fetcher.py       # Fetches NWS data (cron job)
+├── settings.py              # Loads settings from .env
+├── requirements.txt         # Python dependencies
+├── .env                     # User-specific secrets and settings
+└── data/                    # Directory for all runtime data
+├── subscribers.json     # List of users, settings, tags, permissions
+├── outgoing_emails.json # Queue for emails to be sent
+├── failed_dm_queue.json # Queue for failed Direct Messages
+├── weather_current.json # Latest weather observation
+├── weather_forecast.txt # Latest multi-day forecast
+├── nws_alerts.txt       # Current active NWS alerts
+├── dispatcher.txt       # Schedule for custom broadcasts
+├── dispatcher_state.json# Stores last-sent times for broadcasts
+├── dispatcher_status.json# Health status for the web panel
+├── channel0_log.json    # Log of all chat messages for the web panel
+├── sos_log.json         # New file for SOS logging
+├── *.lastrun            # Files indicating cron jobs ran
+└── commands/            # Folder for command files (message bus)
+
+</code></pre>
+<hr />
+<h2 id='deploy-section-7-node-configuration-and-system-software-installation'>Section 7: Node Configuration and System Software Installation</h2>
+<h3 id='deploy-71-step-by-step-node-configuration-guide-heltec-esp32-v3'>7.1. Step-by-Step Node Configuration Guide (Heltec ESP32 V3)</h3>
+<p>This section provides a comprehensive, step-by-step walkthrough for configuring a Heltec ESP32 V3 device. Following these instructions is <strong>critical</strong> for building a network that is faster, more reliable, and less prone to congestion. This guide is intended for administrators using a Linux-based operating system.</p>
+<h4 id='deploy-part-a-configuring-the-guardianbridge-server-node'>Part A: Configuring the GuardianBridge Server Node</h4>
+<p>Follow these steps for the <strong>single</strong> Heltec device that will be physically connected to your GuardianBridge server via USB.</p>
+<p><strong>Step 1: Flashing the Firmware</strong></p>
+<pre><code class='language-shell' lang='shell'># Install the necessary Python tools
+pip install --upgrade meshtastic-flasher meshtastic
+
+# Connect your device and flash the latest stable firmware
+meshtastic-flasher --port /dev/ttyUSB0 --flash-firmware
+</code></pre>
+<p><strong>Step 2: Initial Configuration</strong></p>
+<pre><code class='language-shell' lang='shell'>meshtastic --port /dev/ttyUSB0 --set owner "GuardianBridge-GW"
+meshtastic --port /dev/ttyUSB0 --set region US
+</code></pre>
+<p><strong>Step 3: Critical Network &amp; LoRa Configuration</strong></p>
+<pre><code class='language-shell' lang='shell'># Create a new, private channel and generate a random secure key
+meshtastic --port /dev/ttyUSB0 --ch-add "guardian-private" --ch-set psk random
+
+# Delete the default public channel to prevent accidental traffic
+meshtastic --port /dev/ttyUSB0 --ch-del DEFAULT
+
+# Set the optimal, high-capacity radio preset
+meshtastic --port /dev/ttyUSB0 --set lora.modem_preset MEDIUM_FAST
+</code></pre>
+<p><strong>Step 4: Role and Traffic Management for the Server Node</strong></p>
+<pre><code class='language-shell' lang='shell'># Set the role to CLIENT
+meshtastic --port /dev/ttyUSB0 --set role CLIENT
+
+# Set position broadcasts to a 15-minute interval for a fixed node
+meshtastic --port /dev/ttyUSB0 --set position.position_broadcast_secs 900
+</code></pre>
+<p><strong>Step 5: Final Verification</strong></p>
+<pre><code class='language-shell' lang='shell'># Review configuration and get the channel URL for sharing with other users
+meshtastic --port /dev/ttyUSB0 --info
+meshtastic --port /dev/ttyUSB0 --get-url
+
+# Reboot the device to apply all changes
+meshtastic --port /dev/ttyUSB0 --reboot
+</code></pre>
+<h4 id='deploy-part-b-configuring-a-subscriber-node'>Part B: Configuring a Subscriber Node</h4>
+<p>Follow these steps for <strong>every other node</strong> used by community members.</p>
+<p><strong>Step 1 &amp; 2:</strong> Follow Steps 1 and 2 from Part A, but choose a unique owner name for the user.</p>
+<p><strong>Step 3: Joining the Private Network</strong>
+Use the URL you generated from the server node in Part A, Step 5.</p>
+<pre><code class='language-shell' lang='shell'># Example URL - be sure to use your actual URL
+meshtastic --port /dev/ttyUSB0 --seturl "https://meshtastic.org/d/#Ci...Q"
+</code></pre>
+<p>This single command configures the channel name, encryption key, and all LoRa parameters to match your private network.</p>
+<p><strong>Step 4: Role and Traffic Management for Subscribers</strong></p>
+<pre><code class='language-shell' lang='shell'># Set the role to CLIENT_MUTE - this is ESSENTIAL for all mobile nodes
+meshtastic --port /dev/ttyUSB0 --set role CLIENT_MUTE
+
+# Reduce background traffic to preserve airtime
+meshtastic --port /dev/ttyUSB0 --set telemetry.device_update_interval 0 # Disable telemetry
+meshtastic --port /dev/ttyUSB0 --set position.position_broadcast_secs 3600 # Position once per hour
+</code></pre>
+<p><strong>Step 5:</strong> Review the configuration with <code>meshtastic --info</code> and reboot the device.</p>
+<h3 id='deploy-72-guardianbridge-gateway-installation'>7.2. GuardianBridge Gateway Installation</h3>
+<h4 id='deploy-prerequisites-2'>Prerequisites</h4>
+<ul>
+<li>A Linux server (Raspberry Pi OS recommended) with Python 3.9+ and Git.</li>
+<li>A Meshtastic device connected to the server via USB.</li>
+<li>A web server with PHP support (e.g., Apache2, Nginx). The <code>shell_exec</code> function must be enabled.</li>
+<li>An email account for the gateway (a Gmail account with a 16-digit App Password is recommended).</li>
+</ul>
+<h4 id='deploy-step-1-install-backend-services-2'>Step 1: Install Backend Services</h4>
+<pre><code class='language-shell' lang='shell'># Clone the repository and move it to the recommended directory
+git clone &lt;your-repository-url&gt; ~/guardian-bridge
+sudo mv ~/guardian-bridge /opt/GuardianBridge
+
+# Create data directories and set ownership
+sudo mkdir -p /opt/GuardianBridge/data/commands
+sudo chown -R pi:pi /opt/GuardianBridge
+cd /opt/GuardianBridge
+
+# Install Python dependencies
+pip3 install -r requirements.txt
+</code></pre>
+<h4 id='deploy-step-2-install-web-admin-panel-2'>Step 2: Install Web Admin Panel</h4>
+<pre><code class='language-shell' lang='shell'># Install a web server
+sudo apt-get update &amp;&amp; sudo apt-get install apache2 php libapache2-mod-php -y
+
+# Place the admin panel file in the web root
+sudo cp /path/to/your/map.php /var/www/html/index.php
+
+# Set crucial file permissions for the web server (CRITICAL STEP)
+sudo usermod -a -G www-data pi
+sudo chown -R pi:www-data /opt/GuardianBridge
+sudo chmod -R 775 /opt/GuardianBridge
+# A system reboot is required for the group change to take effect.
+</code></pre>
+<h4 id='deploy-step-3-configure-the-system-2'>Step 3: Configure the System</h4>
+<ol>
+<li><strong>Create and edit the <code>.env</code> file</strong> (<code>cp .env.txt .env</code> and then <code>nano .env</code>) with your specific details (GPS coordinates, email credentials, etc.).</li>
+<li><strong>Set a secure Admin Password</strong> by generating a password hash and placing it in the <code>$admin_password_hash</code> variable in <code>map.php</code>.</li>
+</ol>
+<h4 id='deploy-step-4-enable-and-start-services-2'>Step 4: Enable and Start Services</h4>
+<ol>
+<li><p><strong>Create the dispatcher service file</strong> at <code>sudo nano /etc/systemd/system/guardianbridge.service</code> with the content:</p>
+<pre><code>[Unit]
+Description=Meshtastic Dispatcher Service
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/opt/GuardianBridge
+ExecStart=/usr/bin/python3 /opt/GuardianBridge/meshtastic_dispatcher.py
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+</code></pre>
+</li>
+<li><p><strong>Enable and start the service:</strong></p>
+<pre><code class='language-shell' lang='shell'>sudo systemctl daemon-reload
+sudo systemctl enable guardianbridge.service
+sudo systemctl start guardianbridge.service
+</code></pre>
+</li>
+<li><p><strong>Set up Cron Jobs</strong> by editing the crontab (<code>crontab -e</code>) to run <code>weather_fetcher.py</code> and <code>email_processor.py</code> at regular intervals:</p>
+<pre><code class='language-shell' lang='shell'># Fetch weather data every 15 minutes
+*/15 * * * * /usr/bin/python3 /opt/GuardianBridge/weather_fetcher.py &gt;&gt; /opt/GuardianBridge/data/cron.log 2&gt;&amp;1
+
+# Process incoming and outgoing emails every 5 minutes
+*/5 * * * * /usr/bin/python3 /opt/GuardianBridge/email_processor.py &gt;&gt; /opt/GuardianBridge/data/cron.log 2&gt;&amp;1
+</code></pre>
+</li>
+</ol>
+<hr />
+<h2 id='deploy-section-8-conclusion-and-future-directions'>Section 8: Conclusion and Future Directions</h2>
+<h3 id='deploy-81-summary-and-strategic-recommendations'>8.1. Summary and Strategic Recommendations</h3>
+<p>The combination of a Meshtastic network and the GuardianBridge gateway provides an exceptionally well-suited solution for achieving community communication resilience. The primary challenges are not technological but organizational, requiring a core group with technical knowledge, strategic planning, and a commitment to community-wide user education.</p>
+<p>To maximize success, <strong>Plan Before You Build</strong>, prioritize <strong>Height is Everything</strong> for repeaters, use the <strong>Right Role for the Job</strong> (especially <code>CLIENT_MUTE</code>), <strong>Secure Your Communications</strong> with a private channel, <strong>Protect the Bridge</strong> gateway, and <strong>Educate Your Community</strong>.</p>
+<h3 id='deploy-82-project-roadmap'>8.2. Project Roadmap</h3>
+<p>Future enhancements being considered include:</p>
+<ul>
+<li><strong>Direct SAME/EAS Integration</strong>: Ingesting alert streams directly from NOAA Weather Radio broadcasts for ultimate, internet-independent redundancy.</li>
+<li><strong>Canned Status Messages</strong>: Implementing quick commands for users to broadcast their status (e.g., "I'm OK," "Need Assistance") for rapid community check-ins.</li>
+</ul>
