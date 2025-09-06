@@ -4,8 +4,6 @@ GuardianBridge is a complete, self-contained communication gateway system. It le
 
 It acts as a lifeline when traditional infrastructure fails, providing critical information and a means of contact to keep your community safe, informed, and coordinated.
 
-*A placeholder for a screenshot of your beautiful admin panel.*
-
 ## Why GuardianBridge?
 
 In times of severe weather, natural disasters, or infrastructure failure, cellular networks and internet are often the first systems to go down. GuardianBridge is built to solve this problem by bridging a resilient, off-grid Meshtastic network to essential internet services, ensuring your community's communication lines stay open.
