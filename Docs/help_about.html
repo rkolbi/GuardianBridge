@@ -21,11 +21,146 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
     <i>Keeping your community safe, informed, and connected when it matters most.</i>
   </p>
   <div style="margin-top: 1.5rem; font-size: 0.9rem; color: #B0B3B8;">
-    <p style="margin: 0.25rem 0;"><strong>Revision:</strong> v 1.1.0</p>
+    <p style="margin: 0.25rem 0;"><strong>Revision:</strong> v 1.3.0</p>
     <p style="margin: 0.25rem 0;"><strong>Copyright:</strong> © 2025 Robert Kolbasowski.</p>
   </div>
 </div>
 <br>
+<div class="help-content">
+<h2 id='updates-title'>What's New in GuardianBridge</h2>
+
+<h3 id='v13-title'><strong>GuardianBridge v1.3 "Dispatch"</strong></h3>
+<p>This update transforms the SOS system into a true multi-incident command platform, giving administrators, responders, and users the tools they need to manage chaos with clarity.</p>
+<p>This release focuses on three core areas: providing peace of mind for those in distress, empowering responders with advanced coordination tools, and giving administrators situational awareness.</p>
+
+<h4><strong>1. For You and Your Family: A Personalized Safety Net</strong></h4>
+<p>In an emergency, knowing you've been heard and that help is on the way is everything. These features are designed to provide that peace of mind.</p>
+<ul>
+  <li><strong>Immediate Confirmation & Updates:</strong> The moment you send an SOS, the system confirms it has been received. As responders begin to move, you'll get real-time updates with a growing list of names, so you know exactly who is coming to help.
+    <ul>
+      <li><em>Confirmation:</em> <code>🤖 Your SOSM has been received. Alerting assigned personnel.</code></li>
+      <li><em>First Responder:</em> <code>🤖 Help is on the way. Alice is responding to your alert.</code></li>
+      <li><em>Second Responder:</em> <code>🤖 Help is on the way. Alice and Bob are now responding to your alert.</code></li>
+    </ul>
+  </li>
+  <li><strong>New Profile Fields for Critical Info:</strong> In the Admin Panel, you can now add two new crucial pieces of information to your user profile:
+    <ul>
+      <li><strong>Emergency Point of Contact / Next of Kin:</strong> A dedicated field to store information for responders, such as a spouse's contact info, a neighbor's name, or critical medical notes.</li>
+      <li><strong>SOS Notify List:</strong> This powerful new field allows you to create a custom notification list. You can add a comma-separated list of <strong>email addresses, node IDs, or GuardianBridge usernames</strong>. When you trigger an SOS, the system will send the full alert not only to the official tagged responders but also to every contact on your personal list, ensuring your family and friends are immediately notified.</li>
+    </ul>
+  </li>
+</ul>
+
+<h4><strong>2. For Responders: A Conversational Interface for a Crisis</strong></h4>
+<p>What happens when you send <code>RESPONDING</code> and there are three active emergencies? The gateway will now ask you which one you're heading to.</p>
+<ol>
+  <li><strong>Step 1:</strong> You send <code>RESPONDING</code> as a Direct Message to the gateway.</li>
+  <li><strong>Step 2:</strong> The gateway instantly replies with a numbered list of active incidents:
+    <pre><code>Multiple active alerts. Reply with command and number (e.g., ACK 2):
+1. SOSM from Alice
+2. SOSF from David</code></pre>
+  </li>
+  <li><strong>Step 3:</strong> You commit to a specific incident by replying with the command and number: <code>RESPONDING 1</code>.</li>
+</ol>
+<p>The system then logs you as responding to Alice's alert, notifies the admin, and updates all other responders. This simple, conversational system makes it easy to coordinate even when the situation is complex.</p>
+
+<h4><strong>3. For Administrators: The Incident Command Dashboard</strong></h4>
+<p>Your "Live Node List" is no longer just a list; during a crisis, it becomes a true <strong>Incident Command Dashboard</strong>.</p>
+<p>When multiple SOS alerts are active, the list automatically reorganizes itself, grouping responders and acknowledgers directly under the specific incident they've committed to. This provides an instant, at-a-glance "order of battle" for the entire situation.</p>
+<ul>
+  <li><strong>SOS Sender 1 (Alice)</strong> - Highlighted in Red
+    <ul>
+      <li><em>SOS Message: "Need medical assistance for injured dog"</em></li>
+      <li><strong>Bob (Responding)</strong> - Highlighted in Green</li>
+      <li><strong>Charlie (Acknowledged)</strong> - Highlighted in Yellow</li>
+    </ul>
+  </li>
+  <li><strong>SOS Sender 2 (David)</strong> - Highlighted in Red
+    <ul>
+      <li><em>SOS Message: "Smoke visible from my location"</em></li>
+    </ul>
+  </li>
+  <li><strong>Other Network Nodes...</strong></li>
+</ul>
+<p>This hierarchical view gives you immediate, critical situational awareness, allowing you to see which incidents are being handled and which still need resources.</p>
+
+<hr style="border-top: 1px solid #3C4043; margin: 2rem 0;">
+
+<h3><strong>How to Use the New Features</strong></h3>
+<p>I've kept the process simple so anyone can use it—even under stress.</p>
+<ul>
+  <li><strong>For Users in Distress:</strong>
+    <ul>
+      <li>Ask your administrator to update your user profile with your <strong>"Emergency Point of Contact"</strong> and <strong>"SOS Notify"</strong> information.</li>
+      <li>Send <code>SOS</code> with a brief note:
+        <pre><code>SOSF Smoke visible from my location</code></pre>
+      </li>
+      <li>Look for the confirmation message.</li>
+      <li>Reply <code>Y</code> or <code>YES</code> if you receive a <code>[CHECK-IN]</code> prompt.</li>
+    </ul>
+  </li>
+  <li><strong>For Responders:</strong>
+    <ul>
+      <li>When you see an alert, send <code>ACK</code>. If there are multiple incidents, the gateway will ask you to choose. Reply with <code>ACK 1</code>, <code>ACK 2</code>, etc.</li>
+      <li>If you’re heading to the scene, send <code>RESPONDING</code>. If prompted, reply with <code>RESPONDING 1</code>, <code>RESPONDING 2</code>, etc.</li>
+    </ul>
+  </li>
+  <li><strong>For Administrators:</strong>
+    <ul>
+      <li>The new Incident Command Dashboard is fully automatic. Simply monitor the "Live Node List" on the Status tab during an event.</li>
+      <li>In the <strong>Settings</strong> tab, configure the <strong>SOS Timers & Escalation</strong> to match your community’s protocols.</li>
+    </ul>
+  </li>
+</ul>
+
+<hr style="border-top: 1px solid #3C4043; margin: 2rem 0;">
+
+<h3 id='v12-title'><strong>GuardianBridge v1.2 "Lifeline Lookout"</strong></h3>
+<p>This major update transformed our SOS system into a more responsive, semi-automated emergency communication platform built to keep communities connected when it matters most.</p>
+
+<h4><strong>1. For the Person in Distress: Peace of Mind in Seconds</strong></h4>
+<p>In an emergency, the scariest moment is wondering if your call for help even got through. Lifeline Lookout removes that uncertainty:</p>
+<ul>
+  <li><strong>Instant Confirmation:</strong> The moment you send an SOS, the system alerts your response team <em>and</em> sends you an immediate confirmation:
+    <pre><code>🤖 Your SOSM has been received. Alerting assigned personnel.</code></pre>
+    Now you know for sure that help is on the way.
+  </li>
+  <li><strong>Multi-Responder Updates:</strong> Emergencies often require more than one responder. As each team member sends <code>RESPONDING</code>, you see a running list of names:
+    <ul>
+      <li><em>First responder:</em> <code>🤖 Help is on the way. Alice is responding to your alert.</code></li>
+      <li><em>Second responder:</em> <code>🤖 Help is on the way. Alice and Bob are now responding to your alert.</code></li>
+    </ul>
+  </li>
+  <li><strong>SOS with Context:</strong> A message is good. A message with context saves lives. Add a short note to your SOS—for example:
+    <pre><code>SOSM Need medical assistance for injured dog</code></pre>
+    Responders see this first, giving them vital information before they arrive.
+  </li>
+</ul>
+
+<h4><strong>2. For Responders & Admins: Clear, Coordinated Response</strong></h4>
+<p>To prevent confusion and overlap, Lifeline Lookout adds new tools for response teams:</p>
+<ul>
+  <li><strong>Team-Based Response:</strong> Multiple responders can now send <code>RESPONDING</code>, with each update shared to all team members so everyone knows who’s on the way.</li>
+  <li><strong>Incident Command Dashboard:</strong> In the Admin Panel, the “Live Node List” now transforms during an SOS:
+    <ul>
+      <li>SOS sender: Top of the list, in red</li>
+      <li>Responders: Grouped below, in green</li>
+      <li>Acknowledged-but-not-responding members: Grouped in yellow</li>
+    </ul>
+    This gives admins a clear, real-time view of the entire situation.
+  </li>
+</ul>
+
+<h4><strong>3. For System Resilience: Built-In Safety Nets</strong></h4>
+<p>Emergencies can escalate quickly. Lifeline Lookout includes features to keep help moving even when things go wrong:</p>
+<ul>
+  <li><strong>Active Check-In (Dead Man’s Switch):</strong> The system periodically pings the person in distress. If there’s no response after multiple attempts, it automatically escalates the alert with an <strong>UNRESPONSIVE</strong> status for all responders.</li>
+  <li><strong>No-Response Escalation:</strong> If no tagged responders acknowledge an alert within a set time, the system automatically rebroadcasts the SOS to the entire network, ensuring no one is left behind.</li>
+</ul>
+
+<hr style="border-top: 3px solid #555; margin: 3rem 0;">
+</div>
+
 <h2 id='manual-title'>Part 1: GuardianBridge User Manual</h2>
 <h3 id='table-of-contents'>Table of Contents</h3>
 <ul>
@@ -97,7 +232,7 @@ The <code>email_processor.py</code> script then intelligently strips the origina
 <li><strong>Node to Tag Group</strong>: A user with the "Node Tag Send" permission (granted by an admin) can send a message directly from their device to a tag group using the <code>tagsend</code> command.</li>
 </ul>
 <h4 id='flexible-scheduled-broadcasts'>Flexible Scheduled Broadcasts</h4>
-<p>The <code>data/dispatcher.txt</code> file holds a JSON array of broadcast jobs. This allows for complex scheduling without modifying code. The dispatcher checks this file every minute and evaluates each job's rules (<code>days</code>, <code>start_time</code>, <code>stop_time</code>, <code>interval_mins</code>) to see if a broadcast is due. It tracks the <code>last_sent</code> timestamp within the file itself to ensure it respects the specified interval.</p>
+<p>The <code>data/dispatcher_jobs.json</code> file holds a JSON array of broadcast jobs. This allows for complex scheduling without modifying code. The dispatcher checks this file every minute and evaluates each job's rules (<code>days</code>, <code>start_time</code>, <code>stop_time</code>, <code>interval_mins</code>) to see if a broadcast is due. It tracks the <code>last_sent</code> timestamp within the file itself to ensure it respects the specified interval.</p>
 <h4 id='sos-emergency-alert-system'>SOS Emergency Alert System</h4>
 <p>A comprehensive SOS system allows users to signal for help and administrators to manage the response.</p>
 <ul>
@@ -221,14 +356,14 @@ sudo systemctl start guardianbridge.service
 <h4 id='subscription--status-commands'>Subscription &amp; Status Commands</h4>
 <figure class='table-figure'><table>
 <thead>
-<tr><th style='text-align:left;' >Command</th><th style='text-align:left;' >Description</th></tr></thead>
-<tbody><tr><td style='text-align:left;' ><code>help</code></td><td style='text-align:left;' >Shows a list of available commands.</td></tr><tr><td style='text-align:left;' ><code>subscribe</code></td><td style='text-align:left;' >Subscribes you to all automated broadcasts.</td></tr><tr><td style='text-align:left;' ><code>unsubscribe</code></td><td style='text-align:left;' >Unsubscribes you from all broadcasts.</td></tr><tr><td style='text-align:left;' ><code>status</code></td><td style='text-align:left;' >Shows your current name, subscription settings, and assigned tags.</td></tr><tr><td style='text-align:left;' ><code>alerts on/off</code></td><td style='text-align:left;' >Toggles NWS weather alerts.</td></tr><tr><td style='text-align:left;' ><code>weather on/off</code></td><td style='text-align:left;' >Toggles periodic current weather updates.</td></tr><tr><td style='text-align:left;' ><code>forecasts on/off</code></td><td style='text-align:left;' >Toggles scheduled daily forecasts.</td></tr></tbody>
+<tr><th style='text-align:left;'>Command</th><th style='text-align:left;'>Description</th></tr></thead>
+<tbody><tr><td style='text-align:left;' ><code>?</code></td><td style='text-align:left;' >Shows a list of available commands.</td></tr><tr><td style='text-align:left;' ><code>subscribe</code></td><td style='text-align:left;' >Subscribes you to all automated broadcasts.</td></tr><tr><td style='text-align:left;' ><code>unsubscribe</code></td><td style='text-align:left;' >Unsubscribes you from all broadcasts.</td></tr><tr><td style='text-align:left;' ><code>status</code></td><td style='text-align:left;' >Shows your current name, subscription settings, and assigned tags.</td></tr><tr><td style='text-align:left;' ><code>alerts on/off</code></td><td style='text-align:left;' >Toggles NWS weather alerts.</td></tr><tr><td style='text-align:left;' ><code>weather on/off</code></td><td style='text-align:left;' >Toggles periodic current weather updates.</td></tr><tr><td style='text-align:left;' ><code>forecasts on/off</code></td><td style='text-align:left;' >Toggles scheduled daily forecasts.</td></tr></tbody>
 </table></figure>
 <h4 id='on-demand-group--email-commands'>On-Demand, Group &amp; Email Commands</h4>
 <figure class='table-figure'><table>
 <thead>
 <tr><th style='text-align:left;' >Command</th><th style='text-align:left;' >Description</th></tr></thead>
-<tbody><tr><td style='text-align:left;' ><code>?</code></td><td style='text-align:left;' >Instantly fetches the current or next upcoming forecast.</td></tr><tr><td style='text-align:left;' ><code>name/YourName</code></td><td style='text-align:left;' >Registers or updates your display name. Must be a single word. Ex: <code>name/John</code></td></tr><tr><td style='text-align:left;' ><code>email/to/subj/body</code></td><td style='text-align:left;' >Sends an email. Ex: <code>email/friend@test.com/Mesh Msg/Hello from the field!</code></td></tr><tr><td style='text-align:left;' ><code>tagsend/tags/msg</code></td><td style='text-align:left;' >Sends a message to a tag group. Ex: <code>tagsend/CERT/Meeting at 5</code>. <em>Requires admin-granted permission.</em></td></tr><tr><td style='text-align:left;' ><code>SOS</code>, <code>SOSP</code>, <code>SOSF</code>, <code>SOSM</code></td><td style='text-align:left;' >Triggers an emergency alert (General, Police, Fire, Medical).</td></tr><tr><td style='text-align:left;' ><code>CLEAR</code>, <code>CANCEL</code>, <code>SAFE</code></td><td style='text-align:left;' >Clears your active emergency alert.</td></tr></tbody>
+<tbody><tr><td style='text-align:left;' ><code>wx</code></td><td style='text-align:left;' >Instantly fetches the current or next upcoming forecast.</td></tr><tr><td style='text-align:left;' ><code>name/YourName</code></td><td style='text-align:left;' >Registers or updates your display name. Must be a single word. Ex: <code>name/John</code>.</td></tr><tr><td style='text-align:left;' ><code>phone/1|2/number</code></td><td style='text-align:left;' >Sets one of your two phone numbers. Ex: <code>phone/1/555-1234</code>.</td></tr><tr><td style='text-align:left;' ><code>address/your address</code></td><td style='text-align:left;' >Sets your physical address. Ex: <code>address/123 Main St, Anytown</code>.</td></tr><tr><td style='text-align:left;' ><code>email/to/subj/body</code></td><td style='text-align:left;' >Sends an email. Ex: <code>email/to@addr.com/subject/body</code>.</td></tr><tr><td style='text-align:left;' ><code>tagsend/tags/msg</code></td><td style='text-align:left;' >Sends a message to a tag group. Ex: <code>tagsend/CERT/Meeting at 5</code>. <em>Requires admin-granted permission.</em></td></tr><tr><td style='text-align:left;' ><code>SOS</code>, <code>SOSP</code>, <code>SOSF</code>, <code>SOSM</code></td><td style='text-align:left;' >Triggers an emergency alert (General, Police, Fire, Medical). Can include a message.</td></tr><tr><td style='text-align:left;' ><code>CLEAR</code>, <code>CANCEL</code>, <code>SAFE</code></td><td style='text-align:left;' >Clears your active emergency alert.</td></tr><tr><td style='text-align:left;' ><code>ACK</code> or <code>RESPONDING</code></td><td style='text-align:left;' >Acknowledge or respond to an active SOS alert.</td></tr><tr><td style='text-align:left;' ><code>active</code> or <code>alertstatus</code></td><td style='text-align:left;' >Get a list of all currently active SOS alerts.</td></tr></tbody>
 </table></figure>
 <h3 id='authorized-user-guide-using-email-features'>Authorized User Guide (Using Email Features)</h3>
 <h4 id='sending-a-message-to-a-mesh-user-email-relay'>Sending a Message to a Mesh User (Email Relay)</h4>
@@ -249,7 +384,7 @@ sudo systemctl start guardianbridge.service
 <p>If you have been granted broadcast permission, you can send a message to all users on the network directly from your email client.</p>
 <ul>
 <li><strong>To:</strong> <code>your-gateway-email@example.com</code></li>
-<li><strong>Standard Broadcast Subject:</strong> <code>broadcast</code></li>
+<li><strong>Standard Broadcast Subject:</strong> <code>Broadcast</code></li>
 <li><strong>Alert Broadcast Subject:</strong> <code>!broadcast</code> or <code>broadcast!</code> (This prepends an audible bell character to the message).</li>
 <li>The body of your email will be sent to every node. You will receive an email confirming that your broadcast was sent or informing you if you are not authorized.</li>
 </ul>
@@ -276,9 +411,9 @@ sudo systemctl start guardianbridge.service
     ├── outgoing_emails.json # Queue for emails to be sent
     ├── failed_dm_queue.json # Queue for failed Direct Messages
     ├── weather_current.json # Latest weather observation
-    ├── weather_forecast.txt # Latest multi-day forecast
-    ├── nws_alerts.txt       # Current active NWS alerts
-    ├── dispatcher.txt       # Schedule for custom broadcasts
+    ├── weather_forecast.json# Latest multi-day forecast
+    ├── nws_alerts.json      # Current active NWS alerts
+    ├── dispatcher_jobs.json # Schedule for custom broadcasts
     ├── dispatcher_state.json# Stores last-sent times for broadcasts
     ├── dispatcher_status.json# Health status for the web panel
     ├── channel0_log.json    # Log of all chat messages for the web panel
@@ -539,9 +674,9 @@ sudo systemctl start guardianbridge.service
 <p>Interact with the GuardianBridge gateway by sending it Direct Messages from your Meshtastic device.</p>
 <h4 id='deploy-subscription--status-commands-2'>Subscription &amp; Status Commands</h4>
 <figure class='table-figure'><table>
-<thead>
+<thead class="text-left">
 <tr><th style='text-align:left;' >Command</th><th style='text-align:left;' >Description</th></tr></thead>
-<tbody><tr><td style='text-align:left;' ><code>help</code></td><td style='text-align:left;' >Shows a list of available commands.</td></tr><tr><td style='text-align:left;' ><code>subscribe</code></td><td style='text-align:left;' >Subscribes you to all automated broadcasts.</td></tr><tr><td style='text-align:left;' ><code>unsubscribe</code></td><td style='text-align:left;' >Unsubscribes you from all broadcasts.</td></tr><tr><td style='text-align:left;' ><code>status</code></td><td style='text-align:left;' >Shows your current name, subscription settings, and assigned tags.</td></tr><tr><td style='text-align:left;' ><code>alerts on/off</code></td><td style='text-align:left;' >Toggles NWS weather alerts.</td></tr><tr><td style='text-align:left;' ><code>weather on/off</code></td><td style='text-align:left;' >Toggles periodic current weather updates.</td></tr><tr><td style='text-align:left;' ><code>forecasts on/off</code></td><td style='text-align:left;' >Toggles scheduled daily forecasts.</td></tr></tbody>
+<tbody><tr><td style='text-align:left;' ><code>?</code></td><td style='text-align:left;' >Shows a list of available commands.</td></tr><tr><td style='text-align:left;' ><code>subscribe</code></td><td style='text-align:left;' >Subscribes you to all automated broadcasts.</td></tr><tr><td style='text-align:left;' ><code>unsubscribe</code></td><td style='text-align:left;' >Unsubscribes you from all broadcasts.</td></tr><tr><td style='text-align:left;' ><code>status</code></td><td style='text-align:left;' >Shows your current name, subscription settings, and assigned tags.</td></tr><tr><td style='text-align:left;' ><code>alerts on/off</code></td><td style='text-align:left;' >Toggles NWS weather alerts.</td></tr><tr><td style='text-align:left;' ><code>weather on/off</code></td><td style='text-align:left;' >Toggles periodic current weather updates.</td></tr><tr><td style='text-align:left;' ><code>forecasts on/off</code></td><td style='text-align:left;' >Toggles scheduled daily forecasts.</td></tr></tbody>
 </table></figure>
 <h4 id='deploy-on-demand-group--email-commands-2'>On-Demand, Group &amp; Email Commands</h4>
 <figure class='table-figure'><table>
@@ -556,6 +691,7 @@ sudo systemctl start guardianbridge.service
 <p>Compose a new email to the gateway's address with the word <code>Tag</code> followed by the tag names in the subject line (e.g., <code>Tag CERT MEDICAL</code>). The body of your email will be delivered to all users with either of those tags.</p>
 <h4 id='deploy-sending-a-network-wide-broadcast-admins-only-2'>Sending a Network-Wide Broadcast (Admins Only)</h4>
 <p>If you have broadcast permission, send an email to the gateway address with the subject <code>broadcast</code> for a standard broadcast or <code>!broadcast</code> or <code>broadcast!</code> for an audible alert broadcast.</p>
+<p>If you have broadcast permission, send an email to the gateway address with the subject <code>Broadcast</code> for a standard broadcast or <code>!broadcast</code> or <code>broadcast!</code> for an audible alert broadcast.</p>
 <h3 id='deploy-54-use-cases-for-community-resilience'>5.4. Use Cases for Community Resilience</h3>
 <ul>
 <li><strong>Extending Lifeline Communications via Email:</strong> By bridging to the internet (especially a resilient source like satellite), GuardianBridge provides a critical link for external contact when local infrastructure fails.</li>
@@ -605,9 +741,9 @@ sudo systemctl start guardianbridge.service
 ├── outgoing_emails.json # Queue for emails to be sent
 ├── failed_dm_queue.json # Queue for failed Direct Messages
 ├── weather_current.json # Latest weather observation
-├── weather_forecast.txt # Latest multi-day forecast
-├── nws_alerts.txt       # Current active NWS alerts
-├── dispatcher.txt       # Schedule for custom broadcasts
+├── weather_forecast.json# Latest multi-day forecast
+├── nws_alerts.json      # Current active NWS alerts
+├── dispatcher_jobs.json # Schedule for custom broadcasts
 ├── dispatcher_state.json# Stores last-sent times for broadcasts
 ├── dispatcher_status.json# Health status for the web panel
 ├── channel0_log.json    # Log of all chat messages for the web panel

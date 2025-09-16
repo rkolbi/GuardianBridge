@@ -8,6 +8,7 @@ It acts as a resilient communication hub, ensuring that even when all other syst
 
 ## Table of Contents
 
+  * 1.  What's New in GuardianBridge
   * 1.  What is GuardianBridge?
   * 2.  System Philosophy
   * 3.  Core Capabilities
@@ -19,6 +20,85 @@ It acts as a resilient communication hub, ensuring that even when all other syst
   * 9.  File Structure
   * 10. Troubleshooting
   * 11. Project Roadmap
+
+## 1. What's New in GuardianBridge
+
+### **GuardianBridge v1.3 "Dispatch"**
+This update transforms the SOS system into a true multi-incident command platform, giving administrators, responders, and users the tools they need to manage chaos with clarity.
+
+This release focuses on three core areas: providing peace of mind for those in distress, empowering responders with advanced coordination tools, and giving administrators situational awareness.
+
+#### **1. For You and Your Family: A Personalized Safety Net**
+In an emergency, knowing you've been heard and that help is on the way is everything. These features are designed to provide that peace of mind.
+* **Immediate Confirmation & Updates:** The moment you send an SOS, the system confirms it has been received. As responders begin to move, you'll get real-time updates with a growing list of names, so you know exactly who is coming to help.
+* **New Profile Fields for Critical Info:** In the Admin Panel, you can now add two new crucial pieces of information to your user profile:
+    * **Emergency Point of Contact / Next of Kin:** A dedicated field to store information for responders, such as a spouse's contact info, a neighbor's name, or critical medical notes.
+    * **SOS Notify List:** This powerful new field allows you to create a custom notification list. You can add a comma-separated list of **email addresses, node IDs, or GuardianBridge usernames**. When you trigger an SOS, the system will send the full alert not only to the official tagged responders but also to every contact on your personal list, ensuring your family and friends are immediately notified.
+
+#### **2. For Responders: A Conversational Interface for a Crisis**
+What happens when you send `RESPONDING` and there are three active emergencies? The gateway will now ask you which one you're heading to.
+1.  **Step 1:** You send `RESPONDING` as a Direct Message to the gateway.
+2.  **Step 2:** The gateway instantly replies with a numbered list of active incidents:
+    ```
+    Multiple active alerts. Reply with command and number (e.g., ACK 2):
+    1. SOSM from Alice
+    2. SOSF from David
+    ```
+3.  **Step 3:** You commit to a specific incident by replying with the command and number: `RESPONDING 1`.
+
+The system then logs you as responding to Alice's alert, notifies the admin, and updates all other responders. This simple, conversational system makes it easy to coordinate even when the situation is complex.
+
+#### **3. For Administrators: The Incident Command Dashboard**
+Your "Live Node List" is no longer just a list; during a crisis, it becomes a true **Incident Command Dashboard**.
+
+When multiple SOS alerts are active, the list automatically reorganizes itself, grouping responders and acknowledgers directly under the specific incident they've committed to. This provides an instant, at-a-glance "order of battle" for the entire situation.
+* **SOS Sender 1 (Alice)** - Highlighted in Red
+    * *SOS Message: "Need medical assistance for injured dog"*
+    * **Bob (Responding)** - Highlighted in Green
+    * **Charlie (Acknowledged)** - Highlighted in Yellow
+* **SOS Sender 2 (David)** - Highlighted in Red
+    * *SOS Message: "Smoke visible from my location"*
+* **Other Network Nodes...**
+
+This hierarchical view gives you immediate, critical situational awareness, allowing you to see which incidents are being handled and which still need resources.
+
+---
+
+### **GuardianBridge v1.2 "Lifeline Lookout"**
+This major update transformed our SOS system into a more responsive, semi-automated emergency communication platform built to keep communities connected when it matters most.
+
+#### **1. For the Person in Distress: Peace of Mind in Seconds**
+In an emergency, the scariest moment is wondering if your call for help even got through. Lifeline Lookout removes that uncertainty:
+* **Instant Confirmation:** The moment you send an SOS, the system alerts your response team *and* sends you an immediate confirmation:
+    ```
+    🤖 Your SOSM has been received. Alerting assigned personnel.
+    ```
+    Now you know for sure that help is on the way.
+* **Multi-Responder Updates:** Emergencies often require more than one responder. As each team member sends `RESPONDING`, you see a running list of names:
+    * *First responder:* `🤖 Help is on the way. Alice is responding to your alert.`
+    * *Second responder:* `🤖 Help is on ahe way. Alice and Bob are now responding to your alert.`
+* **SOS with Context:** A message is good. A message with context saves lives. Add a short note to your SOS—for example:
+    ```
+    SOSM Need medical assistance for injured dog
+    ```
+    Responders see this first, giving them vital information before they arrive.
+
+#### **2. For Responders & Admins: Clear, Coordinated Response**
+To prevent confusion and overlap, Lifeline Lookout adds new tools for response teams:
+* **Team-Based Response:** Multiple responders can now send `RESPONDING`, with each update shared to all team members so everyone knows who’s on the way.
+* **Incident Command Dashboard:** In the Admin Panel, the “Live Node List” now transforms during an SOS:
+    * SOS sender: Top of the list, in red
+    * Responders: Grouped below, in green
+    * Acknowledged-but-not-responding members: Grouped in yellow
+
+This gives admins a clear, real-time view of the entire situation.
+
+#### **3. For System Resilience: Built-In Safety Nets**
+Emergencies can escalate quickly. Lifeline Lookout includes features to keep help moving even when things go wrong:
+* **Active Check-In (Dead Man’s Switch):** The system periodically pings the person in distress. If there’s no response after multiple attempts, it automatically escalates the alert with an **UNRESPONSIVE** status for all responders.
+* **No-Response Escalation:** If no tagged responders acknowledge an alert within a set time, the system automatically rebroadcasts the SOS to the entire network, ensuring no one is left behind.
+
+---
 
 ## 1\. What is GuardianBridge?
 
@@ -82,7 +162,7 @@ This powerful feature allows for targeted communication to specific groups. Tags
 
 #### Flexible Scheduled Broadcasts
 
-The `data/dispatcher.txt` file holds a JSON array of broadcast jobs. This allows for complex scheduling without modifying code. The dispatcher checks this file every minute and evaluates each job's rules (`days`, `start_time`, `stop_time`, `interval_mins`) to see if a broadcast is due. It tracks the `last_sent` timestamp within the file itself to ensure it respects the specified interval.
+The `data/dispatcher_jobs.json` file holds a JSON array of broadcast jobs. This allows for complex scheduling without modifying code. The dispatcher checks this file every minute and evaluates each job's rules (`days`, `start_time`, `stop_time`, `interval_mins`) to see if a broadcast is due. It tracks the `last_sent` timestamp within the file itself to ensure it respects the specified interval.
 
 #### SOS Emergency Alert System
 
@@ -253,7 +333,7 @@ To send a message to a group of users based on their assigned tags, compose a ne
 If you have been granted broadcast permission, you can send a message to all users on the network directly from your email client.
 
   * **To:** `your-gateway-email@example.com`
-  * **Standard Broadcast Subject:** `broadcast`
+  * **Standard Broadcast Subject:** `Broadcast`
   * **Alert Broadcast Subject:** `!broadcast` or `broadcast!` (This prepends an audible bell character to the message).
   * The body of your email will be sent to every node. You will receive an email confirming that your broadcast was sent or informing you if you are not authorized.
 
@@ -262,7 +342,7 @@ If you have been granted broadcast permission, you can send a message to all use
 The system's stability comes from its modular design, where tasks are separated into distinct, independent scripts. The components communicate via a simple and robust file-based system centered around the `data/` directory. This prevents an error in one part of the system (like email fetching) from crashing another.
 
   * **`meshtastic_dispatcher.py`**: The core service that runs persistently. It listens for commands from users, sends messages, manages all scheduled broadcasts (weather, alerts, custom), and uses the `watchdog` library to instantly detect and process new command files. It also handles SOS alerts, requests location updates, and retries failed direct messages from a queue.
-  * **`weather_fetcher.py`**: A cron job that fetches data from the NWS API (current conditions, forecasts, alerts) and saves it to JSON files in the `data/` directory for the dispatcher to read.
+  * **`weather_fetcher.py`**: A cron job that fetches data from the NWS API (current conditions, forecasts, alerts) and saves it to JSON files in the `data/` directory for the dispatcher to read and display.
   * **`email_processor.py`**: A cron job that handles both sending and receiving emails. It reads outgoing requests from `outgoing_emails.json` and writes incoming messages as command files (`relay` or `broadcast`) for the dispatcher to process. It uses a 4-tier logic to find the intended mesh recipient.
   * **Admin Panel (`map.php`)**: The web interface. When an admin performs an action like sending a broadcast or a DM, the PHP script writes a small JSON file into the `data/commands/` directory.
   * **The `data/` Directory**: This folder acts as the central message queue between the web panel, the email processor, and the main dispatcher. The dispatcher is always "watching" this folder, so when a new command file or a change to `subscribers.json` appears, it immediately processes it. This ensures a decoupled but fully integrated control system.
@@ -283,11 +363,11 @@ All files are located within the `/opt/GuardianBridge/` directory.
     ├── subscribers.json     # List of users, their settings, assigned tags, and permissions
     ├── outgoing_emails.json # Queue for emails to be sent
     ├── failed_dm_queue.json # Queue for failed Direct Messages
-    ├── weather_current.json # Latest weather observation
-    ├── weather_forecast.json# Latest multi-day forecast
+    ├── weather_current.json # Latest weather observation from NWS
+    ├── weather_forecast.json# Latest multi-day forecast from NWS
     ├── nws_alerts.json      # Current active NWS alerts
-    ├── dispatcher.txt       # Schedule for custom broadcasts
-    ├── dispatcher_state.json# Stores last-sent times for broadcasts
+    ├── dispatcher_jobs.json # Schedule for custom broadcasts, managed by the web panel
+    ├── dispatcher_state.json# Stores last-sent times for scheduled broadcasts
     ├── dispatcher_status.json# Health status for the web panel
     ├── channel0_log.json    # Log of all chat messages for the web panel
     ├── sos_log.json         # New file for SOS logging
@@ -312,3 +392,4 @@ All files are located within the `/opt/GuardianBridge/` directory.
 This project is in active development. Future enhancements being considered include:
 
   * **Direct SAME/EAS Integration**: Ingesting alert streams directly from NOAA Weather Radio broadcasts for ultimate redundancy, providing a layer of protection that does not depend on any internet connection.
+  * **Canned Status Messages**: Implementing quick commands for users to broadcast their status (e.g., "I'm OK," "Need Assistance," "Have Supplies") for rapid community check-ins during an emergency.

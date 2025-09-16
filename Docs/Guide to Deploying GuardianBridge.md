@@ -277,7 +277,7 @@ Interact with the GuardianBridge gateway by sending it Direct Messages from your
 
 | Command | Description |
 | :--- | :--- |
-| `help` | Shows a list of available commands. |
+| `?` | Shows a list of available commands. |
 | `subscribe` | Subscribes you to all automated broadcasts. |
 | `unsubscribe` | Unsubscribes you from all broadcasts. |
 | `status` | Shows your current name, subscription settings, and assigned tags. |
@@ -289,12 +289,16 @@ Interact with the GuardianBridge gateway by sending it Direct Messages from your
 
 | Command | Description |
 | :--- | :--- |
-| `?` | Instantly fetches the current or next upcoming forecast. |
+| `wx` | Instantly fetches the current or next upcoming forecast. |
 | `name/YourName` | Registers or updates your display name. Must be a single word. Ex: `name/John`. |
-| `email/to/subj/body` | Sends an email. Ex: `email/friend@test.com/Mesh Msg/Hello from the field!`. |
+| `phone/1|2/number`| Sets one of your two phone numbers. Ex: `phone/1/555-1234`. |
+| `address/your address`| Sets your physical address. Ex: `address/123 Main St, Anytown`. |
+| `email/to/subj/body` | Sends an email. Ex: `email/to@addr.com/subject/body`. |
 | `tagsend/tags/msg`| Sends a message to a tag group. Ex: `tagsend/CERT/Meeting at 5`. *Requires admin-granted permission.* |
-| `SOS`, `SOSP`, `SOSF`, `SOSM` | Triggers an emergency alert (General, Police, Fire, Medical). |
+| `SOS`, `SOSP`, `SOSF`, `SOSM` | Triggers an emergency alert (General, Police, Fire, Medical). Can include a message. |
 | `CLEAR`, `CANCEL`, `SAFE` | Clears your active emergency alert. |
+| `ACK` or `RESPONDING` | Acknowledge or respond to an active SOS alert. |
+| `active` or `alertstatus` | Get a list of all currently active SOS alerts. |
 
 ### 5.3. Authorized User Guide (Using Email Features)
 
@@ -306,7 +310,6 @@ Compose a new email to the gateway's address with the word `Tag` followed by the
 
 #### Sending a Network-Wide Broadcast (Admins Only)
 If you have broadcast permission, send an email to the gateway address with the subject `broadcast` for a standard broadcast or `!broadcast` or `broadcast!` for an audible alert broadcast.
-
 ### 5.4. Use Cases for Community Resilience
 
 * **Extending Lifeline Communications via Email:** By bridging to the internet (especially a resilient source like satellite), GuardianBridge provides a critical link for external contact when local infrastructure fails.
@@ -363,7 +366,7 @@ All files are located within the `/opt/GuardianBridge/` directory.
 ├── weather\_current.json \# Latest weather observation
 ├── weather\_forecast.json\# Latest multi-day forecast
 ├── nws\_alerts.json      \# Current active NWS alerts
-├── dispatcher.txt       \# Schedule for custom broadcasts
+├── dispatcher_jobs.json # Schedule for custom broadcasts, managed by the web panel
 ├── dispatcher\_state.json\# Stores last-sent times for broadcasts
 ├── dispatcher\_status.json\# Health status for the web panel
 ├── channel0\_log.json    \# Log of all chat messages for the web panel

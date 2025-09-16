@@ -1,6 +1,13 @@
 <?php
-// Set the content type to application/json
+// GuardianBridge - api_get_dashboard.php (v1.3.1)
+
 header('Content-Type: application/json');
+session_start();
+
+if (!isset($_SESSION['loggedin']) || $_SESSION['loggedin'] !== true) {
+    header('HTTP/1.1 403 Forbidden');
+    die(json_encode(['error' => 'Authentication required.']));
+}
 
 // --- CONFIGURATION & FILE PATHS ---
 $base_dir = '/opt/GuardianBridge';
@@ -9,7 +16,7 @@ $dispatcher_status_file = $data_dir . '/dispatcher_status.json';
 $weather_fetcher_lastrun_file = $data_dir . '/weather_fetcher.lastrun';
 $email_processor_lastrun_file = $data_dir . '/email_processor.lastrun';
 $weather_current_file = $data_dir . '/weather_current.json';
-$weather_alerts_file = $data_dir . '/nws_alerts.txt'; // Assuming this is the correct path from your script
+$weather_alerts_file = $data_dir . '/nws_alerts.json'; // Corrected filename
 $sos_log_file = $data_dir . '/sos_log.json';
 
 // --- HELPER FUNCTIONS ---
@@ -45,7 +52,19 @@ $service_status_raw = trim(shell_exec('systemctl is-active guardianbridge.servic
 $dispatcher_status = get_locked_json_file($dispatcher_status_file, ['radio_connected' => false]);
 $weather_current = get_locked_json_file($weather_current_file, ['temperature_f' => 'N/A', 'humidity' => 'N/A']);
 $weather_alerts = get_locked_json_file($weather_alerts_file, []);
-$sos_log = array_reverse(get_locked_json_file($sos_log_file, [])); // Get latest first
+$sos_log = array_reverse(get_locked_json_file($sos_log_file, []));
+
+$active_sos_list = [];
+foreach ($sos_log as $entry) {
+    if (!empty($entry['active'])) {
+        $active_sos_list[] = [
+            'node_id' => $entry['node_id'] ?? 'N/A',
+            'sos_type' => $entry['sos_type'] ?? 'SOS',
+            'user_name' => $entry['user_info']['name'] ?? 'Unknown',
+            'timestamp' => $entry['timestamp'] ?? ''
+        ];
+    }
+}
 
 // --- BUILD THE RESPONSE ARRAY ---
 $response = [
@@ -60,10 +79,12 @@ $response = [
     'weather_info' => [
         'temperature_f' => htmlspecialchars($weather_current['temperature_f'] ?? 'N/A'),
         'humidity' => htmlspecialchars($weather_current['humidity'] ?? 'N/A'),
-        'active_alert' => !empty($weather_alerts) ? htmlspecialchars($weather_alerts[0]['headline'] ?? 'N/A') : 'No active alerts.'
+        'active_alert' => !empty($weather_alerts) && isset($weather_alerts[0]['headline']) ? htmlspecialchars($weather_alerts[0]['headline']) : 'No active alerts.'
     ],
-    'sos_log' => array_slice($sos_log, 0, 10) // Send the 10 most recent SOS logs
+    'sos_log' => array_slice($sos_log, 0, 10),
+    'active_sos_list' => $active_sos_list
 ];
 
 // --- OUTPUT JSON ---
 echo json_encode($response);
+?>

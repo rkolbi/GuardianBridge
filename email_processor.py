@@ -19,17 +19,20 @@
 import os
 import json
 import logging
+import time
 import re
 from datetime import datetime
 import smtplib
 from email.mime.text import MIMEText
 import settings
 from pathlib import Path
+from tzlocal import get_localzone_name
 from imap_tools import MailBox, AND
 from bs4 import BeautifulSoup
 import pytz
 from dateutil.tz import gettz
 
+from contextlib import contextmanager
 # Logging setup
 logging.basicConfig(level=getattr(logging, settings.LOG_LEVEL, "INFO"), format="%(asctime)s [%(levelname)s] %(message)s")
 
@@ -37,6 +40,30 @@ VALID_COMMANDS = {"subscribe", "unsubscribe", "alerts on", "alerts off", "weathe
 
 def sanitize_filename(name):
     return re.sub(r'[^a-zA-Z0-9_-]', '_', name)
+
+@contextmanager
+def file_lock(lock_file_path):
+    """A context manager for file-based locking."""
+    if os.path.exists(lock_file_path):
+        logging.warning(f"Lock file {lock_file_path} already exists. Waiting...")
+    
+    retry_count = 0
+    while retry_count < 10: # Wait for a maximum of 1 second
+        try:
+            fd = os.open(lock_file_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.close(fd)
+            break
+        except FileExistsError:
+            time.sleep(0.1)
+            retry_count += 1
+    else:
+        raise TimeoutError(f"Could not acquire lock for {lock_file_path} after 1 second.")
+
+    try:
+        yield
+    finally:
+        if os.path.exists(lock_file_path):
+            os.remove(lock_file_path)
 
 def load_json(path):
     if not os.path.exists(path): return None
@@ -197,11 +224,9 @@ def process_incoming_emails():
                     cleaned_body = clean_forwarded_body(raw_body)
                     
                     destination_nodes = []
-                    # Tier 1: Subject
                     destination_nodes = find_recipients_in_subject(subject_raw, subscribers)
                     if destination_nodes: logging.info(f"Tier 1 SUCCESS: Found recipients in subject: {destination_nodes}")
                     
-                    # Tier 2: 'To' Header
                     if not destination_nodes:
                         to_header_tuple = msg.headers.get('to')
                         to_header_str = " ".join(to_header_tuple) if to_header_tuple else ""
@@ -209,14 +234,12 @@ def process_incoming_emails():
                             destination_nodes = re.findall(r'(![a-fA-F0-9]{8})', to_header_str)
                             if destination_nodes: logging.info(f"Tier 2 SUCCESS: Found recipients in 'To' header: {destination_nodes}")
 
-                    # Tier 3: Watermark
                     if not destination_nodes:
                         watermark_match = re.search(r'\(?(![a-fA-F0-9]{8})\)? sent the following message:', raw_body)
                         if watermark_match:
                             destination_nodes = [watermark_match.group(1)]
                             logging.info(f"Tier 3 SUCCESS: Found recipient from GuardianBridge watermark: {destination_nodes}")
 
-                    # Tier 4: Generic Body Search
                     if not destination_nodes:
                         body_nodes = re.findall(r'(![a-fA-F0-9]{8})', raw_body)
                         if body_nodes:
@@ -273,66 +296,70 @@ def process_incoming_emails():
 
 def send_pending_outgoing_emails():
     if not os.path.exists(settings.OUTGOING_EMAIL_FILE): return
-    lock_file = f"{settings.OUTGOING_EMAIL_FILE}.lock"
-    if os.path.exists(lock_file):
-        logging.warning("Outgoing email file is locked, skipping.")
-        return
-    try:
-        with open(lock_file, "w") as f: f.write("locked")
-        messages = load_json(settings.OUTGOING_EMAIL_FILE) or []
-        if not messages: return
-        subscribers = load_json(settings.SUBSCRIBERS_FILE) or {}
-        with smtplib.SMTP(settings.IMAP_SERVER, 587) as smtp:
-            smtp.starttls()
-            smtp.login(settings.EMAIL_USER, settings.EMAIL_PASS)
-            for msg_data in messages:
-                recipient = msg_data.get("recipient")
-                subject = msg_data.get("subject")
-                original_body = msg_data.get("body")
-                sender_node_id = msg_data.get("sender_node", "Meshtastic Node")
-                if not all([recipient, subject, original_body]): continue
-                sender_info = subscribers.get(sender_node_id, {})
-                sender_name = sender_info.get("name", sender_node_id)
-                
-                try:
-                    tz = gettz('America/Chicago')
-                    now = datetime.now(tz)
-                    timestamp_str = now.strftime("%H:%M %m/%d")
-                except Exception:
-                    now = datetime.utcnow()
-                    timestamp_str = now.strftime("%H:%M %m/%d UTC")
-                
-                header = (
-                    f"GuardianBridge Notification\n"
-                    f"At {timestamp_str}, {sender_name} ({sender_node_id}) sent the following message:\n\n"
-                )
-                
-                email_body_content = f"{header}{original_body}"
-                
-                footer = (
-                    f"\n\nHow to Reply:\n"
-                    f"To ensure your response is successfully delivered, please send a new email with the following details:\n"
-                    f"    To: {settings.EMAIL_USER}\n"
-                    f"    Subject: {sender_node_id}\n"
-                    f"    (Alternatively, you may use {sender_name} as the subject)\n"
-                    f"    Body: Type your reply in the message body and send.\n\n"
-                    f"Important Notes:\n"
-                    f"- Your entire message—including your email address—must be no more than 190 characters.\n"
-                    f"- GuardianBridge automated processing is currently in beta. Do not use it for critical or time-sensitive communication."
-                )
+    lock_path = settings.OUTGOING_EMAIL_FILE + ".lock"
 
-                full_body = f"{email_body_content}{footer}"
-                email_msg = MIMEText(full_body)
-                email_msg["Subject"] = subject
-                email_msg["From"] = f"{sender_name} ({sender_node_id}) via GuardianBridge <{settings.EMAIL_USER}>"
-                email_msg["To"] = recipient
-                smtp.send_message(email_msg)
-                logging.info(f"Sent email from {sender_name} to {recipient}")
-        with open(settings.OUTGOING_EMAIL_FILE, "w") as f: json.dump([], f)
+    try:
+        with file_lock(lock_path):
+            messages = load_json(settings.OUTGOING_EMAIL_FILE) or []
+            if not messages: return
+            subscribers = load_json(settings.SUBSCRIBERS_FILE) or {}
+            with smtplib.SMTP(settings.IMAP_SERVER, 587) as smtp:
+                smtp.starttls()
+                smtp.login(settings.EMAIL_USER, settings.EMAIL_PASS)
+                for msg_data in messages:
+                    recipient = msg_data.get("recipient")
+                    subject = msg_data.get("subject")
+                    original_body = msg_data.get("body")
+                    sender_node_id = msg_data.get("sender_node", "Meshtastic Node")
+
+                    if not all([recipient, subject, original_body]): continue
+                    
+                    sender_info = subscribers.get(sender_node_id, {})
+                    sender_name = sender_info.get("name", sender_node_id)
+                    full_body = ""
+
+                    if msg_data.get("is_sos"):
+                        footer = (
+                            "\n\n- GuardianBridge automated processing is currently in beta. "
+                            "Do not use it for critical or time-sensitive communication."
+                        )
+                        full_body = f"{original_body}{footer}"
+                    else:
+                        try:
+                            tz = pytz.timezone(get_localzone_name())
+                            now = datetime.now(tz)
+                            timestamp_str = now.strftime("%H:%M %m/%d")
+                        except Exception:
+                            now = datetime.utcnow()
+                            timestamp_str = now.strftime("%H:%M %m/%d UTC")
+                        
+                        header = (
+                            f"GuardianBridge Notification\n"
+                            f"At {timestamp_str}, {sender_name} ({sender_node_id}) sent the following message:\n\n"
+                        )
+                        
+                        footer = (
+                            f"\n\nHow to Reply:\n"
+                            f"To ensure your response is successfully delivered, please send a new email with the following details:\n"
+                            f"    To: {settings.EMAIL_USER}\n"
+                            f"    Subject: For {sender_node_id}\n"
+                            f"    (Alternatively, you may use the user's name: {sender_name})\n"
+                            f"    Body: Type your reply in the message body and send.\n\n"
+                            f"Important Notes:\n"
+                            f"- Your entire message—including your email address—must be no more than 190 characters.\n"
+                            f"- GuardianBridge automated processing is currently in beta. Do not use it for critical or time-sensitive communication."
+                        )
+                        full_body = f"{header}{original_body}{footer}"
+
+                    email_msg = MIMEText(full_body)
+                    email_msg["Subject"] = subject
+                    email_msg["From"] = f"{sender_name} ({sender_node_id}) via GuardianBridge <{settings.EMAIL_USER}>"
+                    email_msg["To"] = recipient
+                    smtp.send_message(email_msg)
+                    logging.info(f"Sent email from {sender_name} to {recipient}")
+            with open(settings.OUTGOING_EMAIL_FILE, "w") as f: json.dump([], f)
     except Exception as e:
         logging.error(f"Failed to send outgoing emails: {e}", exc_info=True)
-    finally:
-        if os.path.exists(lock_file): os.remove(lock_file)
 
 if __name__ == "__main__":
     logging.info("Email processor starting...")

@@ -1,8 +1,26 @@
 <?php
+/**
+ * GuardianBridge - A Meshtastic Gateway for Community Resilience
+ * Copyright (C) 2025 Robert Kolbasowski
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
 // GuardianBridge - Admin Panel
 
 // --- CONFIGURATION ---
-$revision = 'v 1.1.0';
+$revision = 'v1.3.0 "Dispatch"';
 
 // --- AUTHENTICATION CONFIG ---
 $admin_username = 'admin';
@@ -108,10 +126,10 @@ $base_dir = '/opt/GuardianBridge';
 $data_dir = $base_dir . '/data';
 $node_db_status_file = $data_dir . '/node_status.json';
 $subscribers_file = $data_dir . '/subscribers.json';
-$dispatcher_file = $base_dir . '/data/dispatcher.txt';
+$dispatcher_file = $data_dir . '/dispatcher_jobs.json';
 $env_file = $base_dir . '/.env';
 $weather_current_file = $data_dir . '/weather_current.json';
-$weather_alerts_file = $data_dir . '/nws_alerts.txt';
+$weather_alerts_file = $data_dir . '/nws_alerts.json';
 $outgoing_email_file = $data_dir . '/outgoing_emails.json';
 $failed_dm_queue_file = $data_dir . '/failed_dm_queue.json';
 $dispatcher_status_file = $data_dir . '/dispatcher_status.json';
@@ -120,13 +138,20 @@ $email_processor_lastrun_file = $data_dir . '/email_processor.lastrun';
 $commands_dir = $base_dir . '/data/commands';
 $channel0_log_file = $data_dir . '/channel0_log.json';
 $sos_log_file = $data_dir . '/sos_log.json';
+$sos_email_instructions_file = $data_dir . '/sos_email_instructions.txt';
 
 $manageable_settings = [
     'LATITUDE', 'LONGITUDE', 'LOG_LEVEL', 'MESHTASTIC_PORT',
     'EMAIL_USER', 'EMAIL_PASS', 'IMAP_SERVER', 'IMAP_PORT',
     'TRASH_FOLDER_NAME', 'MAX_EMAIL_BODY_LEN',
     'WEATHER_ALERT_INTERVAL_MINS', 'WEATHER_UPDATE_INTERVAL_MINS',
-    'FORECAST_MORNING_SEND_TIME', 'FORECAST_AFTERNOON_SEND_TIME'
+    'FORECAST_MORNING_SEND_TIME', 'FORECAST_AFTERNOON_SEND_TIME',
+    // New SOS Settings
+    'SOS_EMAIL_ENABLED', 'SOS_EMAIL_RECIPIENTS',
+    'SOSM_EMAIL_ENABLED', 'SOSM_EMAIL_RECIPIENTS',
+    'SOSF_EMAIL_ENABLED', 'SOSF_EMAIL_RECIPIENTS',
+    'SOSP_EMAIL_ENABLED', 'SOSP_EMAIL_RECIPIENTS',
+    'SOS_ACK_TIMEOUT_MINS', 'SOS_CHECKIN_INTERVAL_MINS', 'SOS_CHECKIN_MAX_ATTEMPTS'
 ];
 
 // --- HELPER FUNCTIONS ---
@@ -313,12 +338,10 @@ function get_age_string_from_timestamp($timestamp) {
 $message = '';
 $error = '';
 
-// Handle AJAX requests separately to prevent full page reload
 if (isset($_POST['ajax']) && $_POST['ajax'] === 'true') {
     header('Content-Type: application/json');
     $response = ['success' => false, 'message' => 'Invalid action.'];
 
-    // RE-ENABLED CSRF PROTECTION FOR AJAX
     if (!isset($_POST['csrf_token']) || !hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'])) {
         $response['message'] = 'Invalid security token.';
         echo json_encode($response);
@@ -330,7 +353,7 @@ if (isset($_POST['ajax']) && $_POST['ajax'] === 'true') {
         if ($action === 'send_broadcast') {
             $text_to_send = $_POST['broadcast_text'] ?? '';
             $command_data = [];
-            $error_message = ''; // Use a local variable for errors
+            $error_message = '';
             
             if (empty(trim($text_to_send))) {
                 $error_message = 'Message text cannot be empty.';
@@ -383,7 +406,6 @@ if (isset($_POST['ajax']) && $_POST['ajax'] === 'true') {
     exit;
 }
 
-// Main handler for non-AJAX form submissions
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['ajax'])) {
     // 1. VERIFY CSRF TOKEN
     if (!isset($_POST['csrf_token']) || !hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'])) {
@@ -410,7 +432,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['ajax'])) {
             }
         }
         
-        // --- MODIFIED: Handler for the new Admin Clear SOS command ---
+        if ($action === 'update_sos_instructions') {
+            $instructions_content = $_POST['sos_instructions_content'] ?? '';
+                if (@file_put_contents($sos_email_instructions_file, $instructions_content) !== false) {
+                    $message = "SOS email instructions updated successfully.";
+                } else {
+                    $error = "Failed to update SOS instructions file. Please check file permissions on the /opt/GuardianBridge/data/ 
+directory.";
+                    error_log("GuardianBridge Error: Failed to write to " . $sos_email_instructions_file);
+                }
+        }
+
         if ($action === 'admin_clear_sos') {
             $node_id_to_clear = $_POST['node_id'] ?? null;
             if ($node_id_to_clear) {
@@ -434,7 +466,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['ajax'])) {
             $node_id = $_POST['node_id'];
             $subscribers = get_subscribers($subscribers_file);
             if (isset($subscribers[$node_id])) {
-                // VALIDATE AND CLEANSE INPUT
                 $subscribers[$node_id]['name'] = trim(strip_tags($_POST['name']));
                 $subscribers[$node_id]['full_name'] = trim(strip_tags($_POST['full_name']));
                 $subscribers[$node_id]['role'] = trim(strip_tags($_POST['role']));
@@ -442,8 +473,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['ajax'])) {
                 $subscribers[$node_id]['phone_1'] = trim(strip_tags($_POST['phone_1']));
                 $subscribers[$node_id]['phone_2'] = trim(strip_tags($_POST['phone_2']));
                 $subscribers[$node_id]['notes'] = trim(strip_tags($_POST['notes']));
+                $subscribers[$node_id]['poc_info'] = trim(strip_tags($_POST['poc_info']));
+                $subscribers[$node_id]['sos_notify'] = trim(strip_tags($_POST['sos_notify']));
 
-                // Nested address object
                 if (!isset($subscribers[$node_id]['address']) || !is_array($subscribers[$node_id]['address'])) {
                     $subscribers[$node_id]['address'] = [];
                 }
@@ -461,7 +493,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['ajax'])) {
                     $subscribers[$node_id]['tags'] = [];
                 }
 
-                // Checkbox/boolean fields
                 $subscribers[$node_id]['alerts'] = isset($_POST['alerts']);
                 $subscribers[$node_id]['weather'] = isset($_POST['weather']);
                 $subscribers[$node_id]['scheduled_daily_forecast'] = isset($_POST['scheduled_daily_forecast']);
@@ -481,15 +512,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['ajax'])) {
 
         if ($action === 'add_user') {
             $node_id = trim($_POST['new_node_id']);
-            // VALIDATE INPUT
             if (preg_match('/^![a-f0-9]{8}$/', $node_id)) {
                 $subscribers = get_subscribers($subscribers_file);
                 if (!isset($subscribers[$node_id])) {
                     $subscribers[$node_id] = [
-                        "name" => trim(strip_tags($_POST['new_name'])), // Cleanse input
+                        "name" => trim(strip_tags($_POST['new_name'])),
                         "full_name" => "", "role" => "", "email" => "",
                         "address" => ["street" => "", "city" => "", "state" => "", "zip" => ""],
                         "phone_1" => "", "phone_2" => "", "notes" => "",
+                        "poc_info" => "", "sos_notify" => "", // <-- ADD THIS LINE
                         "alerts" => true, "weather" => true, "scheduled_daily_forecast" => true,
                         "email_send" => false, "email_receive" => false, "emailbroadcast" => false,
                         "node_tag_send" => false, "blocked" => false, "tags" => []
@@ -525,7 +556,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['ajax'])) {
             $job_index = $_POST['job_index'];
 
             if (isset($jobs[$job_index])) {
-                // VALIDATE AND CLEANSE INPUT
                 $content = trim(strip_tags($_POST['content']));
                 if (isset($_POST['with_bell']) && $_POST['with_bell'] === 'true') {
                     $content = "\x07" . $content;
@@ -534,7 +564,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['ajax'])) {
                 $new_job = [
                     'name' => trim(strip_tags($_POST['name'])),
                     'content' => $content,
-                    'interval_mins' => max(1, (int)$_POST['interval_mins']), // Ensure at least 1
+                    'interval_mins' => max(1, (int)$_POST['interval_mins']),
                     'enabled' => isset($_POST['enabled']) 
                 ];
 
@@ -566,7 +596,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['ajax'])) {
 
         if ($action === 'add_broadcast_job') {
             $jobs = get_dispatcher_jobs($dispatcher_file);
-            // VALIDATE AND CLEANSE INPUT
             $new_job_name = trim(strip_tags($_POST['new_broadcast_name']));
             if (!empty($new_job_name)) {
                 $name_exists = false;
@@ -584,11 +613,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['ajax'])) {
                         "interval_mins" => 60,
                         "days" => ["MON", "TUE", "WED", "THU", "FRI"],
                         "start_time" => "08:00", "stop_time" => "17:00", "last_sent" => null,
-                        "enabled" => false // This job is disabled by default
+                        "enabled" => false
                     ];
                     if (save_dispatcher_jobs($dispatcher_file, $jobs)) {
-                        $message = "Broadcast job '" . htmlspecialchars($new_job_name) . "' added. Click 'More...' to edit details.";
-                    } else {
+                        $message = "Broadcast job '" . htmlspecialchars($new_job_name) . "' added. Click 'More...' to edit details.";                    } else {
                         $error = "Failed to add broadcast job. Please check server logs.";
                     }
                 } else {
@@ -616,7 +644,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['ajax'])) {
         }
 
         if ($action === 'update_settings') {
-            $new_settings = $_POST['settings'];
+            $new_settings = $_POST['settings'] ?? []; // Default to empty array
+
+            $checkbox_keys = ['SOS_EMAIL_ENABLED', 'SOSM_EMAIL_ENABLED', 'SOSF_EMAIL_ENABLED', 'SOSP_EMAIL_ENABLED'];
+            foreach ($checkbox_keys as $key) {
+                if (!isset($new_settings[$key])) {
+                    $new_settings[$key] = 'False';
+                }
+            }
+
             if (isset($new_settings['EMAIL_PASS']) && $new_settings['EMAIL_PASS'] === '********') {
                 $current_settings = get_env_settings($env_file, $manageable_settings);
                 $new_settings['EMAIL_PASS'] = $current_settings['EMAIL_PASS'];
@@ -654,22 +690,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['ajax'])) {
 
 
 // --- DATA FOR DISPLAY ---
-// [MODIFIED] All file_get_contents calls are replaced with the new safe helper function.
 $settings = get_env_settings($env_file, $manageable_settings);
 $gateway_lat = $settings['LATITUDE'] ?? 36.5877;
 $gateway_lon = $settings['LONGITUDE'] ?? -92.0506;
 $node_statuses = get_locked_json_file($node_db_status_file, []);
 $subscribers = get_subscribers($subscribers_file);
-$dispatcher_jobs = get_dispatcher_jobs($dispatcher_file);
-$weather_current = get_locked_json_file($weather_current_file, null);
+$dispatcher_jobs = get_locked_json_file($dispatcher_file, []);
+$weather_current = get_locked_json_file($weather_current_file, []);
 $weather_alerts = get_locked_json_file($weather_alerts_file, []);
-$outgoing_emails = get_locked_json_file($outgoing_email_file, null);
-$failed_dms = get_locked_json_file($failed_dm_queue_file, null);
+$outgoing_emails = get_locked_json_file($outgoing_email_file, []);
+$failed_dms = get_locked_json_file($failed_dm_queue_file, []);
 $dispatcher_status = get_locked_json_file($dispatcher_status_file, null);
 $channel0_messages = get_channel0_messages($channel0_log_file);
 $sos_log = get_locked_json_file($sos_log_file, []);
 $days_of_week = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
-
+$sos_instructions_content = is_readable($sos_email_instructions_file) ? file_get_contents($sos_email_instructions_file) : '';
 $active_sos_node_id = null;
 if (is_array($node_statuses)) {
     foreach ($node_statuses as $node_id => $status) {
@@ -681,24 +716,32 @@ if (is_array($node_statuses)) {
 }
 
 $setting_descriptions = [
-    'LATITUDE' => 'The geographical latitude of the gateway (e.g., 40.7128). This is required for fetching accurate local weather data from the National Weather Service (NWS) API.',
-    'LONGITUDE' => 'The geographical longitude of the gateway (e.g., -74.0060). This is required for fetching accurate local weather data from the National Weather Service (NWS) API.',
-    'LOG_LEVEL' => 'Controls the amount of detail logged by the backend scripts. Recommended values are INFO, DEBUG, WARNING, or ERROR. DEBUG is the most verbose and 
-is useful for troubleshooting.',
-    'MESHTASTIC_PORT' => "The system device path for the connected Meshtastic radio. On Linux, this is typically /dev/ttyUSB0. On Windows, it would be a COM port like COM3. Set to 'None' to enable auto-detection.",
-    'EMAIL_USER' => 'The full email address of the account that will send and receive emails via the gateway (e.g., your-gateway@gmail.com).',
-    'EMAIL_PASS' => 'The password for the email account. For services like Gmail, this must be a 16-character "App Password", not your main account password. This 
-field is hidden for security.',
-    'IMAP_SERVER' => 'The address of the IMAP server for reading incoming emails. Common examples: imap.gmail.com, outlook.office365.com, imap.mail.yahoo.com.',
-    'IMAP_PORT' => 'The port for the IMAP server. This is almost always 993 for a standard SSL/TLS connection.',
-    'TRASH_FOLDER_NAME' => 'The exact name of the folder on the email server where processed emails should be moved. Common names include "Trash", "Bin", or "[Gmail]/Trash".',
-    'MAX_EMAIL_BODY_LEN' => 'The maximum number of characters allowed for an email body sent from the mesh network. This prevents messages from being split into too many parts. A value around 180 is recommended.',
-    'WEATHER_ALERT_INTERVAL_MINS' => 'How often, in minutes, an ongoing NWS alert should be re-broadcast. New alerts are always sent immediately. A value of 15-30 
-minutes is recommended to avoid excessive messages during a long-lasting alert.',
-    'WEATHER_UPDATE_INTERVAL_MINS' => 'Controls how often, in minutes, the current weather conditions are broadcast to the network. The data itself is fetched separately in the background. A value of 30-60 minutes is recommended to reduce channel noise.',
-    'FORECAST_MORNING_SEND_TIME' => 'The time of day to automatically broadcast the morning forecast to subscribed users. Use 24-hour format (e.g., 07:00 for 7:00 
-AM).',
-    'FORECAST_AFTERNOON_SEND_TIME' => 'The time of day to automatically broadcast the afternoon forecast to subscribed users. Use 24-hour format (e.g., 16:30 for 4:30 PM).'
+    'LATITUDE' => 'The geographical latitude of the gateway (e.g., 40.7128). Required for fetching accurate local weather data.',
+    'LONGITUDE' => 'The geographical longitude of the gateway (e.g., -74.0060). Required for fetching accurate local weather data.',
+    'LOG_LEVEL' => 'Controls logging detail. Recommended: INFO, DEBUG, WARNING, or ERROR. DEBUG is most verbose.',
+    'MESHTASTIC_PORT' => "Device path for the Meshtastic radio (e.g., /dev/ttyUSB0). Set to 'None' for auto-detection.",
+    'EMAIL_USER' => 'The full email address for the gateway (e.g., your-gateway@gmail.com).',
+    'EMAIL_PASS' => 'The 16-character "App Password" for the email account, not your main password.',
+    'IMAP_SERVER' => 'IMAP server for incoming emails (e.g., imap.gmail.com).',
+    'IMAP_PORT' => 'IMAP server port, almost always 993 for SSL/TLS.',
+    'TRASH_FOLDER_NAME' => 'The exact name of the trash folder on your email server (e.g., "[Gmail]/Trash").',
+    'MAX_EMAIL_BODY_LEN' => 'Max characters for an email body sent from the mesh. Recommended: ~180.',
+    'WEATHER_ALERT_INTERVAL_MINS' => 'How often, in minutes, to re-broadcast an ongoing NWS alert. Recommended: 15-30.',
+    'WEATHER_UPDATE_INTERVAL_MINS' => 'How often, in minutes, to broadcast current weather conditions. Recommended: 30-60.',
+    'FORECAST_MORNING_SEND_TIME' => 'Time to broadcast the morning forecast (24-hour format, e.g., 07:00).',
+    'FORECAST_AFTERNOON_SEND_TIME' => 'Time to broadcast the afternoon forecast (24-hour format, e.g., 16:30).',
+    // New SOS Descriptions
+    'SOS_EMAIL_ENABLED' => 'Enable email notifications for general (SOS) alerts.',
+    'SOS_EMAIL_RECIPIENTS' => 'Comma-separated list of emails to receive general SOS alerts.',
+    'SOSM_EMAIL_ENABLED' => 'Enable email notifications for Medical (SOSM) alerts.',
+    'SOSM_EMAIL_RECIPIENTS' => 'Comma-separated list of emails to receive Medical SOS alerts.',
+    'SOSF_EMAIL_ENABLED' => 'Enable email notifications for Fire (SOSF) alerts.',
+    'SOSF_EMAIL_RECIPIENTS' => 'Comma-separated list of emails to receive Fire SOS alerts.',
+    'SOSP_EMAIL_ENABLED' => 'Enable email notifications for Police (SOSP) alerts.',
+    'SOSP_EMAIL_RECIPIENTS' => 'Comma-separated list of emails to receive Police SOS alerts.',
+    'SOS_ACK_TIMEOUT_MINS' => 'Minutes to wait for a responder ACK before broadcasting an SOS alert network-wide.',
+    'SOS_CHECKIN_INTERVAL_MINS' => 'Minutes between automated check-in pings to a user in an active SOS.',
+    'SOS_CHECKIN_MAX_ATTEMPTS' => 'Number of unanswered check-in pings before escalating an SOS to "UNRESPONSIVE".'
 ];
 ?>
 <!DOCTYPE html>
@@ -717,7 +760,8 @@ AM).',
         .tab-button { position: relative; transition: color 0.2s; cursor: pointer; }
         .tab-button.active { color: #E3E3E3; }
         .tab-button:not(.active) { color: #8E918F; }
-        .tab-button.active::after { content: ''; position: absolute; bottom: -1px; left: 0; right: 0; height: 3px; background-image: linear-gradient(to right, #89B3F8, #A58AFB, #F485A5); }
+        .tab-button.active::after { content: ''; position: absolute; bottom: -1px; left: 0; right: 0; height: 3px; background-image: 
+linear-gradient(to right, #89B3F8, #A58AFB, #F485A5); }
         input[type="text"], input[type="email"], input[type="number"], input[type="time"], input[type="datetime-local"], input[type="password"], select, textarea { background-color: #1E1F20; border: 1px solid #3C4043; color: #E3E3E3; padding: 0.6rem 0.85rem; border-radius: 0.5rem; width: 100%; transition: all 0.2s; }
         input:focus, select:focus, textarea:focus { outline: none; border-color: #89B3F8; box-shadow: 0 0 0 2px rgba(137, 179, 248, 0.3); }
         input::placeholder, textarea::placeholder { color: #8E918F; }
@@ -748,10 +792,12 @@ AM).',
 
         /* --- Chat Theme (Restored) --- */
         #chat-messages-container, #dm-chat-messages-container { display: flex; flex-direction: column; gap: 0.75rem; }
-        .message { max-width: 80%; padding: 0.35rem 1rem; border-radius: 0.75rem; position: relative; border: 1px solid transparent; }
+        .message { max-width: 80%; padding: 0.35rem 1rem; border-radius: 0.75rem; position: relative; border: 1px solid transparent; 
+}
         .message-incoming { align-self: flex-start; border-top-left-radius: 0; border-left: 3px solid #89B3F8; background: linear-gradient(135deg, rgba(137, 179, 248, 0.1), rgba(137, 179, 248, 0.03)); border-color: rgba(137, 179, 248, 0.15); }
         .message-outgoing { align-self: flex-end; border-bottom-right-radius: 0; border-right: 3px solid #A58AFB; background: linear-gradient(135deg, rgba(165, 138, 251, 0.1), rgba(165, 138, 251, 0.03)); border-color: rgba(165, 138, 251, 0.15); }
-        .message-system { align-self: center; max-width: 90%; text-align: center; background: rgba(227, 227, 227, 0.05); border: 1px dashed #525355; color: #8E918F; font-size: 0.9rem; font-style: italic; padding: 0.5rem 1rem; }
+        .message-system { align-self: center; max-width: 90%; text-align: center; background: rgba(227, 227, 227, 0.05); border: 1px 
+dashed #525355; color: #8E918F; font-size: 0.9rem; font-style: italic; padding: 0.5rem 1rem; }
         .message-content { word-break: break-word; white-space: pre-wrap; line-height: 1.3; }
         .message-meta { font-size: 0.75rem; line-height: 1.1; color: #8E918F; margin-top: 0.2rem; }
         .message-username { font-weight: 600; line-height: 1.1; margin-bottom: 0.2rem; }
@@ -797,10 +843,16 @@ AM).',
         </header>
 
         <?php if ($message): ?>
-            <div class="bg-green-500/10 border border-green-500/20 text-green-300 px-4 py-3 rounded-lg relative mb-6" role="alert"><?= $message ?></div>
+            <div class="bg-green-500/10 border border-green-500/20 text-green-300 px-4 py-3 rounded-lg relative mb-6 flex justify-between items-start" role="alert">
+                <div><?= $message ?></div>
+                <button class="ml-4 -mt-1 -mr-1 text-2xl text-green-300/60 hover:text-green-300" onclick="this.parentElement.style.display='none'">&times;</button>
+            </div>
         <?php endif; ?>
         <?php if ($error): ?>
-            <div class="bg-red-500/10 border border-red-500/20 text-red-300 px-4 py-3 rounded-lg relative mb-6" role="alert"><?= htmlspecialchars($error) ?></div>
+            <div class="bg-red-500/10 border border-red-500/20 text-red-300 px-4 py-3 rounded-lg relative mb-6 flex justify-between items-start" role="alert">
+                 <div><?= htmlspecialchars($error) ?></div>
+                 <button class="ml-4 -mt-1 -mr-1 text-2xl text-red-300/60 hover:text-red-300" onclick="this.parentElement.style.display='none'">&times;</button>
+            </div>
         <?php endif; ?>
 
         <div class="flex border-b border-slate-700/50 mb-6">
@@ -882,8 +934,7 @@ text-lg">●</span> Weather Fetcher Cron (Last run: ' . get_file_age_string($wea
 
             <div id="chat-content" class="tab-content" style="display: none;">
                 <div class="card flex flex-col h-[70vh]">
-                    <h2 class="text-2xl font-bold text-slate-100 p-6 border-b border-slate-700/50 flex justify-between items-center">
-                        <span>Channel Traffic</span>
+                    <h2 class="text-2xl font-bold text-slate-100 p-6 border-b border-slate-700/50 flex justify-between items-center">                        <span>Channel Traffic</span>
                         <div class="flex items-center gap-4">
                             <div class="flex items-center gap-x-3 text-sm text-slate-400">
                                 <label class="flex items-center gap-2 cursor-pointer"><input type="checkbox" id="show-dms-checkbox" class="filter-checkbox h-4 w-4"> DMs</label>
@@ -911,7 +962,8 @@ text-lg">●</span> Weather Fetcher Cron (Last run: ' . get_file_age_string($wea
                     <div class="card p-6">
                         <h2 class="text-2xl font-bold mb-4 text-slate-100">Manual Actions</h2>
                         <div class="flex flex-col sm:flex-row gap-4">
-                            <form method="POST"><input type="hidden" name="action" value="run_weather_fetcher"><input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>"><button type="submit" class="btn btn-secondary w-full sm:w-auto">Fetch Weather Now</button></form>
+                            <form method="POST"><input type="hidden" name="action" value="run_weather_fetcher"><input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>"><button type="submit" class="btn btn-secondary w-full sm:w-auto">Fetch 
+Weather Now</button></form>
                             <form method="POST"><input type="hidden" name="action" value="run_email_processor"><input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>"><button type="submit" class="btn btn-secondary w-full sm:w-auto">Process Emails Now</button></form>
                             <form method="POST" id="clear-chat-history-form">
                                 <input type="hidden" name="action" value="clear_chat_history">
@@ -921,8 +973,7 @@ text-lg">●</span> Weather Fetcher Cron (Last run: ' . get_file_age_string($wea
                         </div>
                     </div>
                      <div class="card p-6">
-                        <h2 class="text-2xl font-bold mb-4 text-slate-100">Outgoing Email Queue (<?= count($outgoing_emails) ?>)</h2>
-                        <?php if (!empty($outgoing_emails)): ?>
+                        <h2 class="text-2xl font-bold mb-4 text-slate-100">Outgoing Email Queue (<?= count($outgoing_emails) ?>)</h2>                        <?php if (!empty($outgoing_emails)): ?>
                             <div class="space-y-2 max-h-60 overflow-y-auto border border-slate-700 rounded-md p-3">
                                 <?php foreach($outgoing_emails as $email): ?>
                                     <div class="bg-black/20 p-3 rounded text-sm">
@@ -949,9 +1000,10 @@ text-lg">●</span> Weather Fetcher Cron (Last run: ' . get_file_age_string($wea
                                 <?php foreach($failed_dms as $dm): ?>
                                     <div class="bg-black/20 p-3 rounded text-sm">
                                         <span class="font-medium text-slate-300">To:</span> <span class="text-slate-400 font-mono"><?= htmlspecialchars($dm['destination_id']) ?></span><br>
-                                        <span class="font-medium text-slate-300">Queued:</span> <span class="text-slate-400"><?= htmlspecialchars(date("Y-m-d H:i:s", 
+                                        <span class="font-medium text-slate-300">Queued:</span> <span class="text-slate-400"><?= htmlspecialchars(date("Y-m-d H:i:s",
 strtotime($dm['timestamp']))) ?></span><br>
-                                        <span class="font-medium text-slate-300">Text:</span> <span class="text-slate-400"><?= htmlspecialchars($dm['text']) ?></span>                                    </div>
+                                        <span class="font-medium text-slate-300">Text:</span> <span class="text-slate-400"><?= htmlspecialchars($dm['text']) ?></span>                       
+             </div>
                                 <?php endforeach; ?>
                             </div>
                         <?php else: ?>
@@ -959,45 +1011,30 @@ strtotime($dm['timestamp']))) ?></span><br>
                         <?php endif; ?>
                     </div>
                     <div class="card p-6 md:col-span-2">
-                        <h2 class="text-2xl font-bold mb-4 text-red-400">SOS Alert Log</h2>
-                        
-                        <?php if (!empty($sos_log)): ?>
-                            <div class="space-y-3 max-h-96 overflow-y-auto border border-slate-700 rounded-md p-3">
-                                <?php foreach(array_reverse($sos_log) as $log): // Show most recent first ?>
-                                    <div class="bg-red-900/30 p-4 rounded-lg">
-                                        <div class="flex justify-between items-center mb-2">
-                                            <span class="font-bold text-lg text-red-300">SOS: <?= htmlspecialchars($log['sos_type'] ?? 'GENERAL') ?></span>
-                                            <span class="text-sm text-slate-400"><?= htmlspecialchars(date("Y-m-d H:i", strtotime($log['timestamp']))) ?></span>
-                                        </div>
-                                        <p class="font-mono text-sm">Node: <?= htmlspecialchars($log['node_id']) ?></p>
-                                        <p>User: <b><?= htmlspecialchars($log['user_info']['name'] ?? 'N/A') ?></b> / <?= htmlspecialchars($log['user_info']['full_name'] ?? 'N/A') ?></p>
-                                        <?php if(!empty($log['user_info']['phone_1'])): ?>
-                                            <p>Phone: <?= htmlspecialchars($log['user_info']['phone_1']) ?></p>
-                                        <?php endif; ?>
-                                    </div>
-                                <?php endforeach; ?>
-                            </div>
-                        <?php else: ?>
-                            <p class="text-slate-500">The SOS log is empty.</p>
-                        <?php endif; ?>
-
-                        <div class="mt-4 flex flex-wrap gap-4 items-center">
-                            <?php if ($active_sos_node_id): ?>
-                                <form method="POST" id="admin-clear-sos-form">
-                                    <input type="hidden" name="action" value="admin_clear_sos">
-                                    <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
-                                    <input type="hidden" name="node_id" value="<?= htmlspecialchars($active_sos_node_id) ?>">
-                                    <button type="submit" class="btn btn-green" title="Triggers the full stand-down protocol for this SOS.">Admin Clear SOS</button>
-                                </form>
-                            <?php else: ?>
-                                <button class="btn btn-secondary" disabled title="No active SOS detected in node_status.json">Admin Clear SOS</button>
-                            <?php endif; ?>
-
-                            <form method="POST" id="clear-sos-log-form">
-                                <input type="hidden" name="action" value="clear_sos_log">
-                                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
-                                <button type="submit" class="btn btn-red">Clear SOS Log</button>
-                            </form>
+                        <div class="flex justify-between items-center mb-4">
+                            <h2 class="text-2xl font-bold text-red-400">SOS Alerts</h2>
+                            <a href="api_download_sos_log.php" class="btn btn-secondary" download>
+                                SOS Log Download
+                            </a>
+                        </div>
+                        <p class="text-slate-400 mb-4 text-sm">This is a live, filtered list of nodes actively sending or responding to an SOS event.</p>
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-left min-w-[600px]">
+                                <thead class="bg-black/20 border-b-2 border-slate-700/50">
+                                    <tr>
+                                        <th class="p-3 font-semibold text-sm text-slate-400 uppercase">Node ID / Name</th>
+                                        <th class="p-3 font-semibold text-sm text-slate-400 uppercase">Last Contact</th>
+                                        <th class="p-3 font-semibold text-sm text-slate-400 uppercase">SNR</th>
+                                        <th class="p-3 font-semibold text-sm text-slate-400 uppercase">Hops</th>
+                                        <th class="p-3 font-semibold text-sm text-slate-400 uppercase">Role</th>
+                                        <th class="p-3 font-semibold text-sm text-slate-400 uppercase">Position</th>
+                                        <th class="p-3 font-semibold text-sm text-slate-400 uppercase">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="sos-node-list-body" class="divide-y divide-slate-700/50">
+                                    <tr><td colspan="7" class="p-8 text-center text-slate-500">Loading live SOS data...</td></tr>
+                                </tbody>
+                            </table>
                         </div>
                     </div>
                 </div>
@@ -1013,8 +1050,7 @@ strtotime($dm['timestamp']))) ?></span><br>
                                 <th class="p-4 font-semibold text-sm text-slate-400 uppercase tracking-wider">Broadcast Name</th>
                                 <th class="p-4 font-semibold text-sm text-slate-400 uppercase tracking-wider">Active Days</th>
                                 <th class="p-4 font-semibold text-sm text-slate-400 uppercase tracking-wider">Interval</th>
-                                <th class="p-4 font-semibold text-sm text-slate-400 uppercase tracking-wider">Time / Date Window</th>
-                                <th class="p-4 font-semibold text-sm text-slate-400 uppercase tracking-wider">Actions</th>
+                                <th class="p-4 font-semibold text-sm text-slate-400 uppercase tracking-wider">Time / Date Window</th>                                <th class="p-4 font-semibold text-sm text-slate-400 uppercase tracking-wider">Actions</th>
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-slate-700/50">
@@ -1149,7 +1185,8 @@ radio node right now. Green means it matches the assigned role.">
                                     ?>
                                 </td>
                                 <td class="p-4">
-                                    <button type="button" class="btn btn-secondary text-sm open-user-edit-modal" data-user-data="<?= htmlspecialchars(json_encode($user), ENT_QUOTES, 'UTF-8') ?>">
+                                    <button type="button" class="btn btn-secondary text-sm open-user-edit-modal" data-user-data="<?= 
+htmlspecialchars(json_encode($user), ENT_QUOTES, 'UTF-8') ?>">
                                         More...
                                     </button>
                                 </td>
@@ -1188,46 +1225,108 @@ radio node right now. Green means it matches the assigned role.">
                         <code class="bg-yellow-400/10 text-yellow-200 px-1 py-0.5 rounded text-sm mt-1 inline-block">sudo systemctl restart guardianbridge.service</code>
                     </div>
                     <form method="POST" id="save-settings-form">
-                        <input type="hidden" name="action" value="update_settings">
-                        <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
-                        <div class="space-y-8">
-                            <?php 
-                                $all_settings = get_env_settings($env_file, $manageable_settings);
-                                foreach ($manageable_settings as $key): 
-                                    $value = $all_settings[$key] ?? '';
-                                    $label = ucwords(strtolower(str_replace('_', ' ', $key)));
-                                    $description = $setting_descriptions[$key] ?? 'No description available.';
+    <input type="hidden" name="action" value="update_settings">
+    <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
+    
+    <?php 
+        $all_settings = get_env_settings($env_file, $manageable_settings);
+        // --- FIX START: Separate simple settings for the loop ---
+        $simple_settings = [
+            'LATITUDE', 'LONGITUDE', 'LOG_LEVEL', 'MESHTASTIC_PORT', 'EMAIL_USER', 'EMAIL_PASS',
+            'IMAP_SERVER', 'IMAP_PORT', 'TRASH_FOLDER_NAME', 'MAX_EMAIL_BODY_LEN',
+            'WEATHER_ALERT_INTERVAL_MINS', 'WEATHER_UPDATE_INTERVAL_MINS',
+            'FORECAST_MORNING_SEND_TIME', 'FORECAST_AFTERNOON_SEND_TIME'
+        ];
+    ?>
 
-                                    $input_type = 'text';
-                                    $display_value = $value;
-                                    $placeholder = '';
+    <div class="space-y-8">
+        <?php foreach ($simple_settings as $key): 
+            $value = $all_settings[$key] ?? '';
+            $label = ucwords(strtolower(str_replace('_', ' ', $key)));
+            $description = $setting_descriptions[$key] ?? 'No description available.';
+            $input_type = ($key === 'EMAIL_PASS') ? 'password' : 'text';
+            $display_value = $value;
+            $placeholder = '';
+            if ($key === 'EMAIL_PASS' && !empty($value)) {
+                $display_value = '********';
+                $placeholder = 'Leave unchanged to keep current password';
+            }
+        ?>
+        <div class="border-b border-slate-700/50 pb-8 last:border-b-0">
+            <label for="setting_<?= htmlspecialchars($key) ?>" class="text-base font-semibold text-slate-200"><?= htmlspecialchars($label) ?></label>
+            <p class="text-slate-400 text-sm mt-1 mb-3 max-w-3xl"><?= htmlspecialchars($description) ?></p>
+            <input type="<?= $input_type ?>" id="setting_<?= htmlspecialchars($key) ?>" name="settings[<?= htmlspecialchars($key) ?>]" value="<?= htmlspecialchars($display_value) ?>" placeholder="<?= htmlspecialchars($placeholder) ?>" class="max-w-lg">
+        </div>
+        <?php endforeach; ?>
+    </div>
 
-                                    if ($key === 'EMAIL_PASS') {
-                                        $input_type = 'password';
-                                        if (!empty($value)) {
-                                            $display_value = '********';
-                                            $placeholder = 'Leave unchanged to keep current password';
-                                        } else {
-                                            $display_value = '';
-                                            $placeholder = 'Enter email password or App Password';
-                                        }
-                                    }
-                            ?>
-                            <div class="border-b border-slate-700/50 pb-8 last:border-b-0">
-                                <label for="setting_<?= htmlspecialchars($key) ?>" class="text-base font-semibold text-slate-200"><?= htmlspecialchars($label) ?></label>
-                                <p class="text-slate-400 text-sm mt-1 mb-3 max-w-3xl"><?= htmlspecialchars($description) ?></p>
-                                <input 
-                                    type="<?= $input_type ?>" 
-                                    id="setting_<?= htmlspecialchars($key) ?>" 
-                                    name="settings[<?= htmlspecialchars($key) ?>]" 
-                                    value="<?= htmlspecialchars($display_value) ?>" 
-                                    placeholder="<?= htmlspecialchars($placeholder) ?>"
-                                    class="max-w-lg">
-                            </div>
-                            <?php endforeach; ?>
-                        </div>
-                        <div class="mt-8"><button type="submit" class="btn btn-primary">Save Settings</button></div>
-                    </form>
+    <div class="card p-6 mt-8">
+        <h3 class="text-xl font-bold mb-4 text-slate-100">SOS Email Notifications</h3>
+        <div class="space-y-6">
+            <?php
+            $sos_types = ['SOS' => 'General (SOS)', 'SOSM' => 'Medical (SOSM)', 'SOSF' => 'Fire (SOSF)', 'SOSP' => 'Police (SOSP)'];
+            foreach ($sos_types as $key => $label):
+                $enabled_key = $key . '_EMAIL_ENABLED';
+                $recipients_key = $key . '_EMAIL_RECIPIENTS';
+                $is_checked = (isset($all_settings[$enabled_key]) && $all_settings[$enabled_key] === 'True');
+                $recipients_value = $all_settings[$recipients_key] ?? '';
+            ?>
+            <div class="border-t border-slate-700/50 pt-4 first:border-t-0">
+                <label class="flex items-center gap-3 font-semibold text-slate-200 cursor-pointer">
+                    <input type="checkbox" name="settings[<?= htmlspecialchars($enabled_key) ?>]" value="True" <?= $is_checked ? 'checked' : '' ?>>
+                    <?= htmlspecialchars($label) ?>
+                </label>
+                <p class="text-slate-400 text-sm mt-2 mb-2 max-w-3xl pl-7">Recipient emails (comma-separated). Leave blank if none.</p>
+                <div class="pl-7">
+                    <input type="text" name="settings[<?= htmlspecialchars($recipients_key) ?>]" value="<?= htmlspecialchars($recipients_value) ?>" placeholder="e.g., user1@example.com, user2@example.com">
+                </div>
+            </div>
+            <?php endforeach; ?>
+        </div>
+    </div>
+
+    <div class="card p-6 mt-8">
+        <h3 class="text-xl font-bold mb-4 text-slate-100">SOS Timers & Escalation</h3>
+        <div class="space-y-6">
+            <div>
+                <label for="setting_SOS_ACK_TIMEOUT_MINS" class="text-base font-semibold text-slate-200">No-Acknowledgement Timeout (Minutes)</label>
+                <p class="text-slate-400 text-sm mt-1 mb-3 max-w-3xl">Time to wait for a tagged responder to ACK an SOS before broadcasting the alert network-wide.</p>
+                <input type="number" id="setting_SOS_ACK_TIMEOUT_MINS" name="settings[SOS_ACK_TIMEOUT_MINS]" value="<?= htmlspecialchars($all_settings['SOS_ACK_TIMEOUT_MINS'] ?? 5) ?>" class="max-w-xs">
+            </div>
+            <div>
+                <label for="setting_SOS_CHECKIN_INTERVAL_MINS" class="text-base font-semibold text-slate-200">Active Check-in Interval (Minutes)</label>
+                <p class="text-slate-400 text-sm mt-1 mb-3 max-w-3xl">How often to send an automated "Are you OK?" ping to a user in 
+an active SOS.</p>
+                <input type="number" id="setting_SOS_CHECKIN_INTERVAL_MINS" name="settings[SOS_CHECKIN_INTERVAL_MINS]" value="<?= htmlspecialchars($all_settings['SOS_CHECKIN_INTERVAL_MINS'] ?? 5) ?>" class="max-w-xs">
+            </div>
+            <div>
+                <label for="setting_SOS_CHECKIN_MAX_ATTEMPTS" class="text-base font-semibold text-slate-200">Max Check-in Attempts</label>
+                <p class="text-slate-400 text-sm mt-1 mb-3 max-w-3xl">Number of unanswered check-in pings before escalating an SOS to "UNRESPONSIVE".</p>
+                <input type="number" id="setting_SOS_CHECKIN_MAX_ATTEMPTS" name="settings[SOS_CHECKIN_MAX_ATTEMPTS]" value="<?= htmlspecialchars($all_settings['SOS_CHECKIN_MAX_ATTEMPTS'] ?? 3) ?>" class="max-w-xs">
+            </div>
+        </div>
+    </div>
+    <div class="mt-8"><button type="submit" class="btn btn-primary">Save Settings</button></div>
+</form>
+    <div class="card p-6 mt-8">
+    <h2 class="text-2xl font-bold mb-4 text-slate-100">SOS Email Instructions</h2>
+    <p class="text-slate-400 text-sm mb-4">
+        This content will be appended to the bottom of every SOS notification email. Use it for standard procedures, contact lists, or important reminders for email recipients.
+    </p>
+    <form method="POST">
+        <input type="hidden" name="action" value="update_sos_instructions">
+        <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
+        
+        <div>
+            <label for="sos_instructions_content" class="block text-sm font-medium text-slate-400 mb-2">Instructions Content</label>
+            <textarea id="sos_instructions_content" name="sos_instructions_content" rows="10" class="font-mono text-sm" placeholder="Enter your canned SOS handling instructions here..."><?= htmlspecialchars($sos_instructions_content) ?></textarea>
+        </div>
+        
+        <div class="mt-6">
+            <button type="submit" class="btn btn-primary">Save Instructions</button>
+        </div>
+    </form>
+</div>
                 </div>
             </div>
             <div id="help-content" class="tab-content" style="display: none;">
@@ -1342,14 +1441,23 @@ radio node right now. Green means it matches the assigned role.">
                         </div>
                     </div>
 
-                    <div class="lg:col-span-4 md:col-span-2">
+                    <div class="lg:col-span-2 md:col-span-2">
                         <label for="notes">Notes</label>
                         <textarea name="notes" id="notes" rows="4" class="font-mono text-sm"></textarea>
+                    </div>
+                    <div class="lg:col-span-2 md:col-span-2">
+                        <label for="poc_info">Emergency Point of Contact / Next of Kin</label>
+                        <textarea name="poc_info" id="poc_info" rows="4" class="font-mono text-sm"></textarea>
                     </div>
                     
                     <div class="lg:col-span-4 md:col-span-2">
                         <label for="tags">Tags (comma-separated)</label>
                         <input type="text" id="tags" name="tags" placeholder="CERT, MEDICAL, TEAMLEAD" class="font-mono text-sm">
+                    </div>
+                    
+                    <div class="lg:col-span-4 md:col-span-2">
+                        <label for="sos_notify">SOS Notify (comma-separated names, node IDs, or emails)</label>
+                        <input type="text" id="sos_notify" name="sos_notify" placeholder="e.g., responder-team@example.com, !a1b2c3d4, Bob" class="font-mono text-sm">
                     </div>
                     
                     <div class="lg:col-span-4 md:col-span-2">
@@ -1361,8 +1469,7 @@ radio node right now. Green means it matches the assigned role.">
                             <label class="flex items-center gap-2 font-normal text-slate-400 cursor-pointer"><input type="checkbox" name="email_send"> Email Send</label>
                             <label class="flex items-center gap-2 font-normal text-slate-400 cursor-pointer"><input type="checkbox" name="email_receive"> Email Receive</label>
                             <label class="flex items-center gap-2 font-normal text-slate-400 cursor-pointer"><input type="checkbox" name="emailbroadcast"> Email Broadcast</label>
-                            <label class="flex items-center gap-2 font-normal text-slate-400 cursor-pointer"><input type="checkbox" name="node_tag_send"> Node Tag 
-Send</label>
+                            <label class="flex items-center gap-2 font-normal text-slate-400 cursor-pointer"><input type="checkbox" name="node_tag_send"> Node Tag Send</label>
                         </div>
                     </div>
                     
@@ -1395,7 +1502,8 @@ Send</label>
 
 <div id="broadcast-edit-modal" class="fixed inset-0 bg-black/70 items-center justify-center" style="display: none;">
     <div class="card w-full max-w-4xl max-h-[90vh] flex flex-col mx-4">
-        <h2 id="broadcast-modal-title" class="text-xl font-bold text-slate-100 p-4 border-b border-slate-700/50 flex justify-between items-center">
+        <h2 id="broadcast-modal-title" class="text-xl font-bold text-slate-100 p-4 border-b border-slate-700/50 flex justify-between 
+items-center">
             <span>Edit Broadcast</span>
             <button id="close-broadcast-modal-btn" class="text-slate-400 hover:text-white text-3xl leading-none">×</button>
         </h2>
@@ -1501,8 +1609,7 @@ $day ?></label>
 <script>
     document.addEventListener('DOMContentLoaded', function() {
         // --- GLOBAL STATE & CONFIG ---
-        let nodeDataInterval, chatUpdateInterval, dashboardUpdateInterval; // Added dashboardUpdateInterval
-        let isStatusTabInitialized = false, isChatTabInitialized = false;
+        let isStatusTabInitialized = false, isChatTabInitialized = false, isPollingActive = false;
         
         let map;
         let nodeMarkers = {};
@@ -1510,12 +1617,11 @@ $day ?></label>
         let activeSosNodeId = null;
         let autoFitEnabled = true; // Flag to control map auto-zoom
         const POLLING_INTERVAL = 5000;
+        const csrfToken = '<?= htmlspecialchars($csrf_token) ?>';
         const CHAT_POLLING_INTERVAL = 4000;
         const GATEWAY_LAT = <?= json_encode($gateway_lat) ?>;
         const GATEWAY_LON = <?= json_encode($gateway_lon) ?>;
         L.Icon.Default.imagePath = '/map-items/';
-
-        // --- NEW FUNCTION TO UPDATE DASHBOARD PANELS ---
         async function updateDashboardData() {
             try {
                 const response = await fetch('/map-items/api_get_dashboard.php');
@@ -1554,8 +1660,57 @@ $day ?></label>
                     `;
                 }
 
-                // 3. Update SOS Alert Log Panel
+                // 3. Update SOS Alert Log Panel & Admin Clear Button
                 const sosLogContainer = document.querySelector('#actions-content .card:nth-child(4)');
+                if (sosLogContainer) {
+                    const sosLogContent = sosLogContainer.querySelector('.space-y-3');
+                    const sosLog = data.sos_log;
+
+                    if (sosLogContent) {
+                        if (sosLog.length > 0) {
+                            let sosHtml = '';
+                            sosLog.forEach(log => {
+                                // This logic to build the log entries remains the same
+                                const date = new Date(log.timestamp).toLocaleString();
+                                const phoneHtml = (log.user_info && log.user_info.phone_1) ? `<p>Phone: ${escapeHTML(log.user_info.phone_1)}</p>` : '';
+                                sosHtml += `
+                                    <div class="bg-red-900/30 p-4 rounded-lg">
+                                        <div class="flex justify-between items-center mb-2">
+                                            <span class="font-bold text-lg text-red-300">SOS: ${escapeHTML(log.sos_type || 'GENERAL')}</span>
+                                            <span class="text-sm text-slate-400">${date}</span>
+                                        </div>
+                                        <p class="font-mono text-sm">Node: ${escapeHTML(log.node_id)}</p>
+                                        <p>User: <b>${escapeHTML(log.user_info.name || 'N/A')}</b> / ${escapeHTML(log.user_info.full_name || 'N/A')}</p>
+                                        ${phoneHtml}
+                                    </div>
+                                `;
+                            });
+                            sosLogContent.innerHTML = sosHtml;
+                        } else {
+                            sosLogContent.innerHTML = '<p class="text-slate-500">The SOS log is empty.</p>';
+                        }
+                    }
+
+                    // New logic to update the Admin Clear button dynamically
+                    const adminClearForm = document.getElementById('admin-clear-sos-form');
+                    if (adminClearForm) {
+                        const clearButton = adminClearForm.querySelector('button');
+                        const nodeIdInput = adminClearForm.querySelector('input[name="node_id"]');
+                        if (data.active_sos_node_id) {
+                            nodeIdInput.value = data.active_sos_node_id;
+                            clearButton.disabled = false;
+                            clearButton.classList.remove('btn-secondary');
+                            clearButton.classList.add('btn-green');
+                            clearButton.title = 'Triggers the full stand-down protocol for this SOS.';
+                        } else {
+                            nodeIdInput.value = '';
+                            clearButton.disabled = true;
+                            clearButton.classList.remove('btn-green');
+                            clearButton.classList.add('btn-secondary');
+                            clearButton.title = 'No active SOS detected.';
+                        }
+                    }
+                }
                 if (sosLogContainer) {
                     const sosLogContent = sosLogContainer.querySelector('.space-y-3');
                     const sosLog = data.sos_log;
@@ -1585,6 +1740,30 @@ $day ?></label>
                 }
             } catch (error) {
                 console.error('Error updating dashboard data:', error);
+            }
+        }
+
+        // --- ROBUST POLLING LOGIC ---
+        async function pollStatusData() {
+            if (!isPollingActive) return;
+            try {
+                await updatePageData();
+                await updateDashboardData();
+            } catch (error) {
+                console.error("Polling error:", error);
+            } finally {
+                setTimeout(pollStatusData, POLLING_INTERVAL);
+            }
+        }
+
+        async function pollChatData() {
+            if (!isPollingActive) return;
+            try {
+                await updateChat();
+            } catch (error) {
+                console.error("Chat polling error:", error);
+            } finally {
+                setTimeout(pollChatData, CHAT_POLLING_INTERVAL);
             }
         }
 
@@ -1652,29 +1831,116 @@ $day ?></label>
         }
 
         function updateNodeList(nodes) {
-            const nodeListBody = document.getElementById('node-list-body');
-            const nodeListCount = document.getElementById('node-list-count');
-            if (!nodeListBody || !nodeListCount) return;
-            nodes.sort((a, b) => (b.lastHeard || 0) - (a.lastHeard || 0));
-            nodeListCount.textContent = nodes.length;
-            nodeListBody.innerHTML = '';
-            if (nodes.length === 0) {
-                nodeListBody.innerHTML = '<tr><td colspan="7" class="p-8 text-center text-slate-500">No live node data available.</td></tr>';
+            const mainNodeListBody = document.getElementById('node-list-body');
+            const mainNodeListCount = document.getElementById('node-list-count');
+            const sosNodeListBody = document.getElementById('sos-node-list-body');
+
+            // Update main list on Status tab
+            if (mainNodeListBody && mainNodeListCount) {
+                mainNodeListCount.textContent = nodes.length;
+                renderHierarchicalList(mainNodeListBody, nodes);
+            }
+
+            // Update filtered list on Actions tab
+            if (sosNodeListBody) {
+                const sosInvolvedNodes = nodes.filter(n => n.sos_role !== 'NONE');
+                renderHierarchicalList(sosNodeListBody, sosInvolvedNodes, true);
+            }
+        }
+
+        function renderHierarchicalList(tbodyElement, nodes, isSosOnly = false) {
+            tbodyElement.innerHTML = '';
+            if (!nodes || nodes.length === 0) {
+                const message = isSosOnly ? 'No active SOS events or responders.' : 'No live node data available.';
+                tbodyElement.innerHTML = `<tr><td colspan="7" class="p-8 text-center text-slate-500">${message}</td></tr>`;
                 return;
             }
-            nodes.forEach(node => {
-                const isSos = node.sos ? 'bg-red-900/50' : 'hover:bg-black/20';
-                const sosIndicator = node.sos ? `<span class="inline-block bg-red-500 text-white font-bold rounded-full px-2 py-1 text-xs mr-2">🆘 ${escapeHTML(node.sos)}</span>` : '';
-                const locationButton = (node.latitude && node.longitude) ? `<button class="btn btn-secondary btn-sm location-btn" data-lat="${node.latitude}" data-lon="${node.longitude}">Map It</button>` : '';
-                const position = (node.latitude && node.longitude) ? `${Number(node.latitude).toFixed(4)}, ${Number(node.longitude).toFixed(4)}` : '<span class="text-slate-600">N/A</span>';
-                const row = `<tr class="${isSos}">
-                                <td class="p-3 font-mono">${sosIndicator}<button type="button" class="text-blue-400 hover:text-blue-300 open-dm-chat" data-node-id="${escapeHTML(node.node_id)}" data-node-name="${escapeHTML(node.name || node.node_id)}">${escapeHTML(node.node_id)}</button>${node.name ? `<span class="text-slate-400 font-sans ml-2">(${escapeHTML(node.name)})</span>` : ''}</td>
-                                <td class="p-3">${getAgeStringFromTimestamp(node.lastHeard)}</td><td class="p-3">${escapeHTML(String(node.snr))}</td><td class="p-3">${escapeHTML(String(node.hopsAway))}</td>
-                                <td class="p-3 font-mono text-xs p-1 rounded bg-slate-700 text-slate-300">${escapeHTML(node.role)}</td>
-                                <td class="p-3 font-mono text-sm">${position}</td><td class="p-3">${locationButton}</td>
-                            </tr>`;
-                nodeListBody.innerHTML += row;
-            });
+
+            let sosSenders = nodes.filter(n => n.sos_role === 'SENDER').sort((a, b) => (a.lastHeard || 0) - (b.lastHeard || 0));
+            let otherNodes = nodes.filter(n => n.sos_role !== 'SENDER');
+
+            if (sosSenders.length === 0) {
+                // No active SOS, sort normally by lastHeard
+                otherNodes.sort((a, b) => (b.lastHeard || 0) - (a.lastHeard || 0));
+                otherNodes.forEach(node => tbodyElement.innerHTML += generateNodeRow(node));
+            } else {
+                // Active SOS exists, render hierarchically
+                const participantMap = new Map();
+                otherNodes.forEach(node => {
+                    if (node.sos_parent) {
+                        if (!participantMap.has(node.sos_parent)) {
+                            participantMap.set(node.sos_parent, []);
+                        }
+                        participantMap.get(node.sos_parent).push(node);
+                    }
+                });
+
+                sosSenders.forEach(sender => {
+                    tbodyElement.innerHTML += generateNodeRow(sender);
+                    if (sender.sos_message_payload) {
+                        tbodyElement.innerHTML += generateMessageRow(sender.sos_message_payload);
+                    }
+
+                    const participants = participantMap.get(sender.node_id) || [];
+                    const responders = participants.filter(p => p.sos_role === 'RESPONDER').sort((a, b) => (b.lastHeard || 0) - (a.lastHeard || 0));
+                    const ackers = participants.filter(p => p.sos_role === 'ACKNOWLEDGER').sort((a, b) => (b.lastHeard || 0) - (a.lastHeard || 0));
+
+                    responders.forEach(r => tbodyElement.innerHTML += generateNodeRow(r, 'pl-8'));
+                    ackers.forEach(a => tbodyElement.innerHTML += generateNodeRow(a, 'pl-8'));
+                });
+
+                // On the main list, also show nodes not involved in any SOS
+                if (!isSosOnly) {
+                    const nonParticipants = otherNodes.filter(n => !n.sos_parent).sort((a, b) => (b.lastHeard || 0) - (a.lastHeard || 0));
+                    if (nonParticipants.length > 0 && sosSenders.length > 0) {
+                        tbodyElement.innerHTML += `<tr><td colspan="7" class="p-2 border-t-2 border-slate-700"></td></tr>`;
+                    }
+                    nonParticipants.forEach(node => tbodyElement.innerHTML += generateNodeRow(node));
+                }
+            }
+        }
+
+        function generateNodeRow(node, indentClass = '') {
+            let rowClass = 'hover:bg-black/20';
+            if (node.sos_role === 'SENDER') rowClass = 'bg-red-900/50 font-bold';
+            if (node.sos_role === 'RESPONDER') rowClass = 'bg-green-900/50';
+            if (node.sos_role === 'ACKNOWLEDGER') rowClass = 'bg-yellow-900/50 text-slate-200';
+
+            let standDownForm = '';
+            if (node.sos_role === 'SENDER') {
+                standDownForm = `
+                    <form method="POST" class="inline-block mr-2 stand-down-form">
+                        <input type="hidden" name="csrf_token" value="${csrfToken}">
+                        <input type="hidden" name="action" value="admin_clear_sos">
+                        <input type="hidden" name="node_id" value="${escapeHTML(node.node_id)}">
+                        <button type="submit" class="btn btn-red btn-sm" title="Clear this SOS alert.">STAND DOWN</button>
+                    </form>
+                `;
+            }
+
+            const sosIndicator = node.sos ? `<span class="inline-block bg-red-500 text-white font-bold rounded-full px-2 py-1 text-xs mr-2">🆘 ${escapeHTML(node.sos)}</span>` : '';
+            const locationButton = (node.latitude && node.longitude) ? `<button class="btn btn-secondary btn-sm location-btn" data-lat="${node.latitude}" data-lon="${node.longitude}">Map It</button>` : '';
+            const position = (node.latitude && node.longitude) ? `${Number(node.latitude).toFixed(4)}, ${Number(node.longitude).toFixed(4)}` : '<span class="text-slate-600">N/A</span>';
+
+            return `
+                <tr class="${rowClass}">
+                    <td class="p-3 font-mono ${indentClass}">${standDownForm}${sosIndicator}<button type="button" class="text-blue-400 hover:text-blue-300 open-dm-chat" data-node-id="${escapeHTML(node.node_id)}" data-node-name="${escapeHTML(node.name || node.node_id)}">${escapeHTML(node.node_id)}</button>${node.name ? `<span class="text-slate-400 font-sans ml-2">(${escapeHTML(node.name)})</span>` : ''}</td>
+                    <td class="p-3">${getAgeStringFromTimestamp(node.lastHeard)}</td>
+                    <td class="p-3">${escapeHTML(String(node.snr ?? ''))}</td>
+                    <td class="p-3">${escapeHTML(String(node.hopsAway ?? ''))}</td>
+                    <td class="p-3 font-mono text-xs p-1 rounded bg-slate-700 text-slate-300">${escapeHTML(node.role)}</td>
+                    <td class="p-3 font-mono text-sm">${position}</td>
+                    <td class="p-3">${locationButton}</td>
+                </tr>`;
+        }
+
+        function generateMessageRow(message) {
+            return `
+                <tr class="bg-red-900/30">
+                    <td colspan="7" class="p-3 text-red-200 text-left pl-8 text-sm border-t-2 border-red-500/50">
+                        <strong>Message:</strong> ${escapeHTML(message)}
+                    </td>
+                </tr>`;
         }
 
         function updateSosBanner(nodes) {
@@ -1730,7 +1996,8 @@ $day ?></label>
 
                     const icon = node.sos ? sosIcon : defaultIcon;
                     const labelContent = escapeHTML(node.name || node.node_id);
-                    const normalTooltipOptions = { permanent: true, direction: 'top', className: 'map-node-label', offset: [-15, -5] };
+                    const normalTooltipOptions = { permanent: true, direction: 'top', className: 'map-node-label', offset: [-15, -5] 
+};
                     const sosTooltipOptions = { permanent: true, direction: 'top', className: 'map-node-label', offset: [2, -33] };
 
                     if (nodeMarkers[node_id]) {
@@ -1794,25 +2061,19 @@ $day ?></label>
         function initStatusTab() {
             if (isStatusTabInitialized) return;
             isStatusTabInitialized = true;
-            console.log("Initializing Status Tab...");
             if (document.getElementById('map') && !map) {
                 map = L.map('map').setView([GATEWAY_LAT, GATEWAY_LON], 13);
                 L.tileLayer('/map-items/map-tiles/{z}/{x}/{y}.png', { maxZoom: 18, attribution: '© OpenStreetMap', errorTileUrl: '/map-items/missing_tile.png' }).addTo(map);
             }
-            // Initial calls to populate data immediately
-            updatePageData();
-            updateDashboardData(); 
-            // Start polling intervals
-            nodeDataInterval = setInterval(updatePageData, POLLING_INTERVAL);
-            dashboardUpdateInterval = setInterval(updateDashboardData, POLLING_INTERVAL + 500); // Poll slightly offset from node data
+            isPollingActive = true;
+            pollStatusData();
         }
 
         function initChatTab() {
             if (isChatTabInitialized) return;
             isChatTabInitialized = true;
-            console.log("Initializing Chat Tab...");
-            updateChat(true);
-            chatUpdateInterval = setInterval(updateChat, CHAT_POLLING_INTERVAL);
+            isPollingActive = true;
+            pollChatData();
         }
 
         const tabs = document.querySelectorAll('.tab-button');
@@ -1827,23 +2088,20 @@ $day ?></label>
                 const contentId = tab.dataset.tab + '-content';
                 document.getElementById(contentId).style.display = 'block';
 
+                isPollingActive = false; // Stop polling before re-initializing
                 if (tab.dataset.tab === 'status') {
                     initStatusTab();
                     if(map) {
                         setTimeout(() => map.invalidateSize(), 10);
                     }
                 } else if (tab.dataset.tab === 'chat') {
-                    initChatTab();
+                    initChatTab(); // This will set isPollingActive back to true and start the chat poll
                 }
             });
         });
 
-        // Initialize the default tab on page load
         initStatusTab();
 
-        // --- OTHER EVENT LISTENERS AND MODAL/FORM FUNCTIONS ---
-        // (This section includes all your original code for modals, forms, etc.)
-        
         const sosBannerCloseBtn = document.getElementById('sos-banner-close');
         sosBannerCloseBtn?.addEventListener('click', () => {
             if (activeSosNodeId) {
@@ -1901,9 +2159,12 @@ $day ?></label>
         const userDeleteForm = document.getElementById('user-modal-delete-form');
         if (userDeleteForm) { userDeleteForm.addEventListener('submit', function(e) { e.preventDefault(); showConfirmModal('Are you sure you want to permanently delete this user? This action cannot be undone.', this); }); }
 
-        const saveSettingsForm = document.getElementById('save-settings-form');
-        if (saveSettingsForm) { saveSettingsForm.addEventListener('submit', function(e) { e.preventDefault(); showConfirmModal('Settings will be saved, but you must restart the dispatcher service for changes to take effect.<br><br>Proceed with saving?', this); }); }
-        
+        document.body.addEventListener('submit', function(e) {
+            if (e.target.matches('.stand-down-form')) {
+                e.preventDefault();
+                showConfirmModal('Are you sure you want to stand down this SOS alert? This will clear the alert and notify all responders.', e.target);
+            }
+        });
         function toggleJobFields(form) {
             if (!form) return;
             const selector = form.querySelector('.job-type-selector');
@@ -1970,8 +2231,8 @@ $day ?></label>
                 let isServerMessage = false;
                 for (const prefix of serverMessagePrefixes) { if (text.replace(/^\x07/, '').startsWith(prefix)) { isServerMessage = true; break; } }
                 if (isServerMessage) return showSMs;
-                let isConsideredDM = msg.is_dm || false; 
-                if (!isConsideredDM && msg.from === 'GATEWAY' && text.replace(/^\x07/, '').startsWith('@')) { isConsideredDM = true; }
+                // A DM is either flagged as such from the backend, or is an outgoing message from the gateway starting with @
+                let isConsideredDM = msg.is_dm || (msg.from === 'GATEWAY' && text.replace(/^\x07/, '').startsWith('@'));
                 if (isConsideredDM) return showDMs;
                 return true;
             });
@@ -1990,16 +2251,16 @@ $day ?></label>
             if (!targetNodeId) { dmChatContainer.innerHTML = ''; return; };
             const targetName = lastFetchedSubscribers[targetNodeId]?.name || targetNodeId;
             const filteredMessages = lastFetchedMessages.filter(msg => {
-                if (!msg.is_dm) return false;
-                const fromUserToGateway = msg.from === targetNodeId;
                 const gatewayToUserRegex = new RegExp(`^@${escapeRegExp(targetName)}\\s`, 'i');
                 const fromGatewayToUser = msg.from === 'GATEWAY' && gatewayToUserRegex.test((msg.text || '').replace(/^\x07/, ''));
+                const fromUserToGateway = msg.from === targetNodeId && msg.toId === 'GATEWAY';
                 return fromUserToGateway || fromGatewayToUser;
             });
             const isScrolledToBottom = dmChatWindow.scrollHeight - dmChatWindow.clientHeight <= dmChatWindow.scrollTop + 10;
             dmChatContainer.innerHTML = '';
             if (filteredMessages.length > 0) {
-                filteredMessages.forEach(msg => { dmChatContainer.innerHTML += createMessageHTML(msg, lastFetchedSubscribers, true); });
+                filteredMessages.forEach(msg => { dmChatContainer.innerHTML += createMessageHTML(msg, lastFetchedSubscribers, true); 
+});
             } else {
                 dmChatContainer.innerHTML = `<div class="text-center text-slate-500 py-16"><p>No direct messages with this user yet.</p></div>`;
             }
@@ -2053,7 +2314,8 @@ $day ?></label>
                     setTimeout(() => updateChat(false), 500);
                 } else { alert('Failed to send message: ' + data.message); }
             })
-            .catch(error => { console.error('Error sending message:', error); alert('An error occurred while sending the message.'); })
+            .catch(error => { console.error('Error sending message:', error); alert('An error occurred while sending the message.'); 
+})
             .finally(() => { allButtons.forEach(b => { b.disabled = false; }); button.textContent = originalButtonText; });
         }
         
@@ -2068,8 +2330,9 @@ $day ?></label>
             dmChatContainer.innerHTML = `<div class="text-center text-slate-500 py-16"><p>Loading messages...</p></div>`;
             dmModal.style.display = 'flex';
             document.body.style.overflow = 'hidden';
-            if (!isChatTabInitialized) {
-                await loadChatData();
+            if (!isPollingActive) { // Start polling if it's not already running
+                isPollingActive = true;
+                pollChatData();
             }
             renderDmChat();
             setTimeout(() => {
@@ -2082,6 +2345,10 @@ $day ?></label>
             if (!dmModal) return;
             dmModal.style.display = 'none';
             document.body.style.overflow = '';
+            // Stop polling ONLY if the main chat tab is not also active.
+            if (!isChatTabInitialized) {
+                isPollingActive = false;
+            }
             dmTargetNodeIdInput.value = '';
         }
         
@@ -2132,6 +2399,8 @@ $day ?></label>
             userEditForm.querySelector('input[name="address_zip"]').value = userData.address?.zip || '';
             userEditForm.querySelector('textarea[name="notes"]').value = userData.notes || '';
             userEditForm.querySelector('input[name="tags"]').value = (userData.tags || []).join(', ');
+            userEditForm.querySelector('textarea[name="poc_info"]').value = userData.poc_info || '';
+            userEditForm.querySelector('input[name="sos_notify"]').value = userData.sos_notify || '';
             userEditForm.querySelector('input[name="alerts"]').checked = userData.alerts || false;
             userEditForm.querySelector('input[name="weather"]').checked = userData.weather || false;
             userEditForm.querySelector('input[name="scheduled_daily_forecast"]').checked = userData.scheduled_daily_forecast || false;
@@ -2187,6 +2456,5 @@ $day ?></label>
         document.getElementById('close-broadcast-modal-btn-footer')?.addEventListener('click', closeBroadcastEditModal);
     });
 </script>
-
 </body>
 </html>

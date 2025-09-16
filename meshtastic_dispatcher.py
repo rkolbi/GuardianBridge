@@ -62,8 +62,11 @@ BOT_MESSAGE_PREFIXES = (
 
 MAX_LOG_ENTRIES = 200
 COMMAND_COOLDOWN_SECONDS = 3
-SOS_COMMANDS = {"SOSP", "SOSF", "SOSM", "SOS"}
+SOS_COMMANDS = ("SOSP", "SOSF", "SOSM", "SOS")
 CLEAR_COMMANDS = {"CLEAR", "CANCEL", "SAFE"}
+ACK_COMMANDS = {"ACK"}
+RESPONDING_COMMANDS = {"RESPONDING"}
+CHECKIN_RESPONSES = {"Y", "YES", "OK"}
 
 
 # --- GLOBAL VARIABLES & SETUP ---
@@ -79,6 +82,8 @@ node_last_heard_cache = {}
 CHANNEL0_LOG_FILE = getattr(settings, 'CHANNEL0_LOG_FILE', '/opt/GuardianBridge/data/channel0_log.json')
 gateway_node_id = None
 user_last_command_time = {}
+user_interaction_state = {}
+user_interaction_state_lock = threading.Lock()
 broadcasted_alert_headlines = set()
 
 # --- Throttling mechanism ---
@@ -172,7 +177,12 @@ def get_log_timestamp():
 def log_channel_message(sender_id, text, is_dm=False):
     with log_lock:
         log_data = load_json(CHANNEL0_LOG_FILE) or []
-        new_entry = {"from": sender_id, "timestamp": get_log_timestamp(), "text": text, "is_dm": is_dm}
+        new_entry = {
+            "from": sender_id, 
+            "timestamp": get_log_timestamp(), 
+            "text": text, 
+            "is_dm": is_dm
+        }
         log_data.append(new_entry)
         if len(log_data) > MAX_LOG_ENTRIES:
             log_data = log_data[-MAX_LOG_ENTRIES:]
@@ -226,33 +236,27 @@ def update_node_statuses():
     global node_last_heard_cache, gateway_node_id
     if not iface: return
 
-    # Load existing statuses to preserve SOS flags and location data if a node is temporarily offline
     node_statuses = load_json(settings.NODE_STATUS_FILE) or {}
     
     known_node_ids = set(iface.nodes.keys())
     known_node_ids.update(node_last_heard_cache.keys())
 
     for node_id in known_node_ids:
-        # Skip the gateway node for now, we'll add it manually
         if node_id == gateway_node_id:
             continue
             
         node = iface.nodes.get(node_id)
         
-        # Get existing data for this node to use as a fallback
         existing_node_data = node_statuses.get(node_id, {})
         current_sos_status = existing_node_data.get('sos')
         last_known_lat = existing_node_data.get('latitude')
         last_known_lon = existing_node_data.get('longitude')
 
         if node:
-            # Node is online, get fresh data
             role_name = config_pb2.Config.DeviceConfig.Role.Name(node.get('role', 0))
             snr, hops_away, lib_last_heard = node.get('snr'), node.get('hopsAway'), node.get('lastHeard')
-            # Get new location, which might be None if this packet didn't have position data
             lat, lon = node.get('latitude'), node.get('longitude')
         else:
-            # If node not in interface, it's offline. Mark its role as UNKNOWN.
             role_name, snr, hops_away, lib_last_heard, lat, lon = "UNKNOWN", None, None, None, None, None
         
         last_heard_ts = node_last_heard_cache.get(node_id, lib_last_heard)
@@ -262,14 +266,12 @@ def update_node_statuses():
             "lastHeard": last_heard_ts, 
             "snr": snr, 
             "hopsAway": hops_away,
-            # Use new coordinates if they exist, otherwise fall back to the last known coordinates
             "latitude": lat if lat is not None else last_known_lat,
             "longitude": lon if lon is not None else last_known_lon
         }
         if current_sos_status:
             node_statuses[node_id]['sos'] = current_sos_status
 
-    # Manually add/update the gateway node's own status
     if gateway_node_id and gateway_node_id in iface.nodes:
         my_node = iface.nodes[gateway_node_id]
         my_role_int = my_node.get('role', 0)
@@ -290,7 +292,7 @@ def update_sos_status(node_id, sos_code):
     """Updates the SOS status for a node in node_status.json."""
     node_statuses = load_json(settings.NODE_STATUS_FILE) or {}
     if node_id not in node_statuses:
-        node_statuses[node_id] = {} # Create if not exists
+        node_statuses[node_id] = {}
     
     if sos_code:
         node_statuses[node_id]['sos'] = sos_code
@@ -469,7 +471,6 @@ def handle_custom_broadcasts(now):
         
         jobs_modified = False
         for index, job in enumerate(jobs):
-            # Check if the job is enabled before processing ---
             if not job.get("enabled", False):
                 continue
 
@@ -563,7 +564,7 @@ def _cmd_set_phone(sender, args):
     except ValueError:
         return usage
 
-    key = f"phone_{phone_index}" # Creates 'phone_1' or 'phone_2'
+    key = f"phone_{phone_index}"
     with subscribers_lock:
         if sender not in subscribers:
             subscribers[sender] = {"alerts": True, "weather": True, "scheduled_daily_forecast": True, "blocked": False}
@@ -580,7 +581,7 @@ def _cmd_set_address(sender, args):
             subscribers[sender] = {"alerts": True, "weather": True, "scheduled_daily_forecast": True, "blocked": False}
         subscribers[sender]['address'] = address
         save_json_locked(settings.SUBSCRIBERS_FILE, subscribers)
-    return f"Address set." # Return confirmation
+    return f"Address set."
 
 def _cmd_toggle_service(sender, args):
     parts = args.split()
@@ -645,10 +646,29 @@ def _cmd_tagsend(sender, args):
     return None
 
 def _cmd_help(sender, args):
-    return ("Cmds:\nwx\nstatus\n?\nsubscribe\nunsubscribe\n"
+    return ("Cmds:\nwx (weather)\nstatus\n?\nsubscribe\nunsubscribe\n"
             "alerts on|off\nweather on|off\nforecasts on|off\n"
             "name/YourName\nphone/1|2/number\naddress/your address\n"
-            "email/to/subj/body\ntagsend/tags/message")
+            "email/to/subj/body\ntagsend/tags/msg")
+
+def _cmd_sos_status(sender, args):
+    """Checks for and reports on all currently active SOS alerts."""
+    with file_lock(settings.SOS_LOG_FILE + ".lock"):
+        sos_log = load_json(settings.SOS_LOG_FILE) or []
+        active_sos_events = [e for e in sos_log if e.get("active")]
+
+    if not active_sos_events:
+        return "No active SOS alerts at this time."
+
+    response_parts = ["ACTIVE ALERTS:"]
+    with subscribers_lock:
+        for i, sos in enumerate(active_sos_events, 1):
+            sender_name = subscribers.get(sos['node_id'], {}).get('name', sos['node_id'])
+            responding_names = [subscribers.get(r_id, {}).get('name', r_id) for r_id in sos.get('responding_list', [])]
+            responding_str = ", ".join(responding_names) if responding_names else "None"
+            response_parts.append(f"{i}. {sos['sos_type']} from {sender_name} (Responding: {responding_str})")
+    
+    return "\n".join(response_parts)
 
 COMMAND_HANDLERS = {
     "subscribe": _cmd_subscribe, "unsubscribe": _cmd_unsubscribe,
@@ -658,7 +678,11 @@ COMMAND_HANDLERS = {
     "alerts": _cmd_toggle_service,
     "weather": _cmd_toggle_service, "forecasts": _cmd_toggle_service,
     "status": _cmd_get_status, "email": _cmd_send_email,
-    "tagsend": _cmd_tagsend, "wx": _cmd_get_forecast, "?": _cmd_help
+    "tagsend": _cmd_tagsend,
+    "wx": _cmd_get_forecast,
+    "?": _cmd_help,
+    "active": _cmd_sos_status,
+    "alertstatus": _cmd_sos_status
 }
 
 def handle_meshtastic_command(sender, command_text):
@@ -691,179 +715,407 @@ def retry_queued_messages_for_node(node_id):
         time.sleep(MIN_SEND_INTERVAL_SECONDS)
 
 def on_meshtastic_message(packet, interface):
-    global gateway_node_id, node_last_heard_cache
+    global gateway_node_id, node_last_heard_cache, user_interaction_state
     decoded = packet.get("decoded", {})
-    if decoded.get("portnum") == "TEXT_MESSAGE_APP":
-        text = decoded.get("text", "").strip()
-        text_upper = text.upper()
-        sender = packet.get("fromId")
+    if decoded.get("portnum") != "TEXT_MESSAGE_APP":
+        return
 
-        if sender:
-            node_last_heard_cache[sender] = time.time()
+    text = decoded.get("text", "").strip()
+    sender = packet.get("fromId")
+    destination_id = packet.get("toId")
 
-        destination_id = packet.get("toId")
-        if text and sender:
-            retry_queued_messages_for_node(sender)
-            is_direct_message = (destination_id == gateway_node_id)
-            log_channel_message(sender, text, is_dm=is_direct_message)
-            if not is_direct_message: return
+    if not text or not sender:
+        return
 
-            with subscribers_lock:
-                if subscribers.get(sender, {}).get('blocked', False):
-                    logging.info(f"Ignoring command from blocked user: {sender}")
-                    return
+    if sender:
+        node_last_heard_cache[sender] = time.time()
+        retry_queued_messages_for_node(sender)
 
-            current_time = time.time()
-            if current_time - user_last_command_time.get(sender, 0) < COMMAND_COOLDOWN_SECONDS:
-                logging.warning(f"User {sender} rate-limited. Ignoring command: '{text}'")
-                return
-            
-            if text.startswith(BOT_MESSAGE_PREFIXES): return
+    is_dm_to_gateway = (destination_id == gateway_node_id)    
+    log_channel_message(sender, text, is_dm=is_dm_to_gateway)
 
-            # --- SOS & Clear Command Handling ---
-            if text_upper in SOS_COMMANDS:
+    if not is_dm_to_gateway:
+        return
+    
+    with subscribers_lock:
+        if subscribers.get(sender, {}).get('blocked', False):
+            logging.info(f"Ignoring command from blocked user: {sender}")
+            return
+
+    current_time = time.time()
+    if current_time - user_last_command_time.get(sender, 0) < COMMAND_COOLDOWN_SECONDS:
+        logging.warning(f"User {sender} rate-limited. Ignoring command: '{text}'")
+        return
+    
+    if text.startswith(BOT_MESSAGE_PREFIXES):
+        return
+
+    text_upper = text.upper()
+    parts = text_upper.split()
+    cmd_word = parts[0]
+    cmd_arg = parts[1] if len(parts) > 1 else None
+
+    with user_interaction_state_lock:
+        if user_interaction_state.get(sender) == "awaiting_sos_choice":
+            if cmd_word in ACK_COMMANDS.union(RESPONDING_COMMANDS) and cmd_arg and cmd_arg.isdigit():
                 user_last_command_time[sender] = current_time
-                handle_sos_alert(sender, text_upper)
+                del user_interaction_state[sender]
+                handle_sos_choice(sender, cmd_word, int(cmd_arg))
                 return
 
-            if text_upper in CLEAR_COMMANDS:
-                user_last_command_time[sender] = current_time
-                handle_sos_clear(sender)
-                return
+    sos_command = next((cmd for cmd in SOS_COMMANDS if text_upper.startswith(cmd)), None)
+    if sos_command:
+        user_last_command_time[sender] = current_time
+        message_payload = text[len(sos_command):].strip()
+        handle_sos_alert(sender, sos_command, message_payload)
+        return
 
-            command_word = text.lower().strip().split('/')[0].split()[0]
-            if command_word in COMMAND_HANDLERS:
-                user_last_command_time[sender] = current_time 
-                handle_meshtastic_command(sender, text)
+    if cmd_word in CLEAR_COMMANDS:
+        user_last_command_time[sender] = current_time
+        handle_sos_clear(sender)
+        return
 
-def handle_sos_alert(sender_id, sos_code):
-    """Handles triggering an SOS alert by sending two messages:
-    1. The critical alert with location.
-    2. A follow-up with detailed contact/address info.
-    """
-    logging.info(f"SOS '{sos_code}' detected from {sender_id}. Initiating alert protocol.")
+    if cmd_word in ACK_COMMANDS or cmd_word in RESPONDING_COMMANDS:
+        user_last_command_time[sender] = current_time
+        handle_sos_action_initial(sender, cmd_word)
+        return
+    
+    if cmd_word in CHECKIN_RESPONSES:
+        user_last_command_time[sender] = current_time
+        handle_sos_checkin_response(sender)
+        return
 
+    command_word_lower = text.lower().strip().split('/')[0].split()[0]
+    if command_word_lower in COMMAND_HANDLERS:
+        user_last_command_time[sender] = current_time 
+        handle_meshtastic_command(sender, text)
+
+def _queue_sos_email_notification(sos_code, subject, body, extra_recipients=None):
+    """A centralized helper to queue SOS-related email notifications."""
+    email_enabled_map = {
+        "SOS": settings.SOS_EMAIL_ENABLED, "SOSM": settings.SOSM_EMAIL_ENABLED,
+        "SOSF": settings.SOSF_EMAIL_ENABLED, "SOSP": settings.SOSP_EMAIL_ENABLED
+    }
+    email_recipients_map = {
+        "SOS": settings.SOS_EMAIL_RECIPIENTS, "SOSM": settings.SOSM_EMAIL_RECIPIENTS,
+        "SOSF": settings.SOSF_EMAIL_RECIPIENTS, "SOSP": settings.SOSP_EMAIL_RECIPIENTS
+    }
+
+    if not email_enabled_map.get(sos_code):
+        return
+
+    system_recipients = set(email_recipients_map.get(sos_code, []))
+    user_recipients = extra_recipients if extra_recipients else set()
+    final_recipients = list(system_recipients.union(user_recipients))
+
+    if not final_recipients:
+        logging.warning(f"SOS email for {sos_code} is enabled, but no recipients are configured.")
+        return
+
+    logging.info(f"Queueing SOS email notification to: {final_recipients}")
+    with file_lock(settings.OUTGOING_EMAIL_FILE + ".lock"):
+        outgoing = load_json(settings.OUTGOING_EMAIL_FILE) or []
+        for recipient in final_recipients:
+            task = {
+                "recipient": recipient, 
+                "subject": subject, 
+                "body": body, 
+                "sender_node": "GuardianBridge",
+                "is_sos": True 
+            }
+            outgoing.append(task)
+        save_json(settings.OUTGOING_EMAIL_FILE, outgoing)
+
+def handle_sos_alert(sender_id, sos_code, message_payload):
+    logging.info(f"SOS '{sos_code}' from {sender_id} with payload: '{message_payload}'. Initiating alert protocol.")
+    
     if iface:
         try:
             logging.info(f"Requesting immediate position update from SOS node {sender_id}...")
             iface.sendPosition(destinationId=sender_id, wantResponse=True)
+            time.sleep(1)
         except Exception as e:
             logging.error(f"Could not request position from {sender_id}: {e}")
 
-    # 1. Update node status and log the event
-    update_sos_status(sender_id, sos_code)
-    
     with subscribers_lock:
         sender_info = subscribers.get(sender_id, {})
         sender_name = sender_info.get('name', f"Unknown ({sender_id})")
 
-    sos_log = load_json(settings.SOS_LOG_FILE) or []
-    sos_log.append({
-        "timestamp": datetime.now(local_tz).isoformat(),
-        "sos_type": sos_code,
-        "node_id": sender_id,
-        "user_info": sender_info
-    })
-    save_json(settings.SOS_LOG_FILE, sos_log)
-
-    # 2. Find responders
-    tag_to_alert = sos_code
-    with subscribers_lock:
-        responders = [node_id for node_id, data in subscribers.items() if tag_to_alert in data.get('tags', [])]
-    
-    if not responders:
-        logging.warning(f"No responders found with tag '{tag_to_alert}' for SOS from {sender_id}.")
-        return
-
-    # 3. Get location from the node status file
     node_statuses = load_json(settings.NODE_STATUS_FILE) or {}
-    sender_node_data = node_statuses.get(sender_id, {})
-    lat, lon = sender_node_data.get('latitude'), sender_node_data.get('longitude')
+    lat = node_statuses.get(sender_id, {}).get('latitude')
+    lon = node_statuses.get(sender_id, {}).get('longitude')
     
-    location_info = "Location not available."
-    if lat and lon:
-        location_link = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
-        location_info = f"LKP: {location_link}"
+    with file_lock(settings.SOS_LOG_FILE + ".lock"):
+        sos_log = load_json(settings.SOS_LOG_FILE) or []
+        sos_log.append({
+            "timestamp": datetime.now(local_tz).isoformat(), "sos_type": sos_code,
+            "node_id": sender_id, "user_info": sender_info, "active": True,
+            "message_payload": message_payload, "latitude": lat, "longitude": lon,
+            "acknowledged_by": [], "responding_list": [], "last_checkin_time": datetime.now(local_tz).isoformat(),
+            "checkin_attempts": 0, "escalated_no_ack": False, "escalated_unresponsive": False
+        })
+        save_json(settings.SOS_LOG_FILE, sos_log)
     
-    # 4. Construct and send the two messages
-    
-    # --- MESSAGE 1: The Critical Alert ---
-    alert_message_1 = f"{PREFIX_SOS} {sos_code} from {sender_name}\n{location_info}"
+    update_sos_status(sender_id, sos_code)
 
-    # --- MESSAGE 2: Detailed Supplementary Info ---
-    message_lines = [f"🆘{sender_name} INFO:"]
-    
-    # Add full name if it exists
-    if sender_info.get("full_name"):
-        message_lines.append(sender_info["full_name"])
-        
-    # Add phone numbers if they exist
-    if sender_info.get("phone_1"):
-        message_lines.append(f"tel: {sender_info['phone_1']}")
-    if sender_info.get("phone_2"):
-        message_lines.append(f"tel: {sender_info['phone_2']}")
-        
-    # Add formatted address if it exists and is a dictionary
-    address_obj = sender_info.get("address")
-    if isinstance(address_obj, dict):
-        if address_obj.get("street"):
-            message_lines.append(address_obj["street"])
-        
-        city_state_line = []
-        if address_obj.get("city"):
-            city_state_line.append(address_obj["city"])
-        if address_obj.get("state"):
-            city_state_line.append(address_obj["state"])
-        if city_state_line:
-             message_lines.append(", ".join(city_state_line))
-
-        if address_obj.get("zip"):
-            message_lines.append(address_obj["zip"])
-
-    alert_message_2 = "\n".join(message_lines)
-
-    # 5. Relay messages to all responders
-    logging.info(f"Relaying SOS alert to {len(responders)} responders.")
-    for responder_id in responders:
-        # Send the first, most important message
-        send_meshtastic_message(alert_message_1, destination_id=responder_id)
-        
-        # Short pause before sending the second message
-        time.sleep(MIN_SEND_INTERVAL_SECONDS) 
-        
-        # Send the supplementary details if there's anything to send besides the header
-        if len(message_lines) > 1:
-            send_meshtastic_message(alert_message_2, destination_id=responder_id, no_timestamp=True)
-
-def handle_sos_clear(sender_id):
-    """Handles clearing an active SOS."""
-    logging.info(f"SOS CLEAR detected from {sender_id}.")
-
-    # 1. Check for an active SOS to clear
-    node_statuses = load_json(settings.NODE_STATUS_FILE) or {}
-    active_sos_code = node_statuses.get(sender_id, {}).get('sos')
-
-    if not active_sos_code:
-        logging.warning(f"Received CLEAR from {sender_id}, but no active SOS was found for them.")
-        send_meshtastic_message(f"{PREFIX_BOT_RESPONSE} You have no active alert to clear.", destination_id=sender_id)
-        return
-        
-    # 2. Find responders who received the initial alert
-    tag_to_alert = active_sos_code
+    mesh_recipients = set()
+    email_recipients = set()
     with subscribers_lock:
-        sender_name = subscribers.get(sender_id, {}).get('name', sender_id)
-        responders = [node_id for node_id, data in subscribers.items() if tag_to_alert in data.get('tags', [])]
+        tagged_responders = {node_id for node_id, data in subscribers.items() if sos_code in data.get('tags', [])}
+        mesh_recipients.update(tagged_responders)
 
-    # 3. Send "STAND DOWN" notification
+    if sender_info.get('sos_notify'):
+        contacts = [c.strip() for c in sender_info['sos_notify'].split(',') if c.strip()]
+        for contact in contacts:
+            if '@' in contact:
+                email_recipients.add(contact.lower())
+            elif contact.startswith('!'):
+                mesh_recipients.add(contact)
+            else:
+                with subscribers_lock:
+                    found_id = next((nid for nid, data in subscribers.items() if (data.get('name') or '').lower() == contact.lower()), None)
+                    if found_id:
+                        mesh_recipients.add(found_id)
+    
+    # --- Construct Mesh Alert Messages ---
+    location_info = f"LKP: https://www.google.com/maps?q={lat},{lon}" if lat and lon else "Location not available."
+    alert_message_1 = f"{PREFIX_SOS} {sos_code} from {sender_name}" + (f": {message_payload}" if message_payload else "")
+    alert_message_2 = f"{PREFIX_SOS} {location_info}"
+
+    # Construct the third message with detailed user info in the specified multi-line format
+    info_parts = []
+    if sender_info.get('full_name'):
+        info_parts.append(sender_info['full_name'])
+    if sender_info.get('phone_1'):
+        info_parts.append(sender_info['phone_1'])
+    if sender_info.get('phone_2'):
+        info_parts.append(sender_info['phone_2'])
+
+    address_dict = sender_info.get('address', {})
+    if isinstance(address_dict, dict):
+        if address_dict.get('street'):
+            info_parts.append(address_dict['street'])
+        if address_dict.get('city'):
+            info_parts.append(address_dict['city'])
+        
+        state_zip_parts = [part for part in [address_dict.get('state'), address_dict.get('zip')] if part]
+        if state_zip_parts:
+            info_parts.append(' '.join(state_zip_parts))
+
+    alert_message_3 = ""
+    if info_parts:
+        info_string = "\n".join(info_parts)
+        full_info_message = f"{PREFIX_SOS} INFO:\n{info_string}"
+        
+        # Truncate if necessary to fit Meshtastic packet
+        max_len = 200
+        if len(full_info_message.encode('utf-8')) > max_len:
+            overhead = len(f"{PREFIX_SOS} INFO:\n...".encode('utf-8'))
+            info_string_bytes = info_string.encode('utf-8')
+            truncated_bytes = info_string_bytes[:max_len - overhead]
+            # Avoid cutting a line in half
+            info_string = truncated_bytes.decode('utf-8', 'ignore').rsplit('\n', 1)[0]
+            full_info_message = f"{PREFIX_SOS} INFO:\n{info_string}..."
+        alert_message_3 = full_info_message
+
+    logging.info(f"Relaying SOS alert to {len(mesh_recipients)} mesh nodes.")
+    for r_id in mesh_recipients:
+        send_meshtastic_message(alert_message_1, destination_id=r_id)
+        time.sleep(MIN_SEND_INTERVAL_SECONDS)
+        send_meshtastic_message(alert_message_2, destination_id=r_id)
+        if alert_message_3:
+            time.sleep(MIN_SEND_INTERVAL_SECONDS)
+            send_meshtastic_message(alert_message_3, destination_id=r_id)
+
+    timestamp_str = get_formatted_timestamp()
+    
+    address_dict = sender_info.get('address', {})
+    address_str = "N/A"
+    if isinstance(address_dict, dict):
+        address_parts = [
+            address_dict.get('street', ''),
+            address_dict.get('city', ''),
+            address_dict.get('state', ''),
+            address_dict.get('zip', '')
+        ]
+        address_str = ', '.join(part for part in address_parts if part) or "N/A"
+
+    user_details = "\n".join([
+        f"Full Name: {sender_info.get('full_name', 'N/A')}",
+        f"Node ID: {sender_id}",
+        f"Name: {sender_info.get('name', 'N/A')}",
+        f"Phone 1: {sender_info.get('phone_1', 'N/A')}",
+        f"Phone 2: {sender_info.get('phone_2', 'N/A')}",
+        f"Address: {address_str}"
+    ])
+
+    location_url = f"https://www.google.com/maps?q={lat},{lon}" if lat and lon else "Location not available."
+    email_subject = f"[GuardianBridge ALERT] {sos_code} from {sender_name}"
+    email_body = (
+        f"A {sos_code} alert was triggered by {sender_name} at {timestamp_str}.\n\n"
+        f"Message: {message_payload or 'No message provided.'}\n\n"
+        f"--- User Information ---\n{user_details}\n\n"
+        f"--- Last Known Location ---\n{location_url}\n\n"
+        "This is an automated alert."
+    )
+    _queue_sos_email_notification(sos_code, email_subject, email_body, extra_recipients=email_recipients)
+    
+    send_meshtastic_message(f"{PREFIX_BOT_RESPONSE} Your {sos_code} has been received. Alerting assigned personnel.", destination_id=sender_id)
+
+def handle_sos_clear(sender_id, admin_clear=False):
+    logging.info(f"SOS CLEAR initiated for {sender_id}." + (" (Admin)" if admin_clear else ""))
+    
+    with file_lock(settings.SOS_LOG_FILE + ".lock"):
+        sos_log = load_json(settings.SOS_LOG_FILE) or []
+        active_sos_entry = next((e for e in sos_log if e.get("node_id") == sender_id and e.get("active")), None)
+        
+        if not active_sos_entry:
+            logging.warning(f"Received CLEAR for {sender_id}, but no active SOS was found.")
+            if not admin_clear:
+                send_meshtastic_message(f"{PREFIX_BOT_RESPONSE} You have no active alert to clear.", destination_id=sender_id)
+            return
+        
+        active_sos_code = active_sos_entry["sos_type"]
+        active_sos_entry["active"] = False
+        save_json(settings.SOS_LOG_FILE, sos_log)
+    
+    update_sos_status(sender_id, None)
+
+    with subscribers_lock:
+        clearer_name = subscribers.get(sender_id, {}).get('name', sender_id)
+        responders = {node_id for node_id, data in subscribers.items() if active_sos_code in data.get('tags', [])}
+        responders.update(active_sos_entry.get("responding_list", []))
+        responders.update(active_sos_entry.get("acknowledged_by", []))
+
     if responders:
-        stand_down_message = f"STAND DOWN: {sender_name} has cleared the {active_sos_code} alert."
+        stand_down_message = f"STAND DOWN: {clearer_name} has cleared the {active_sos_code} alert."
         logging.info(f"Sending stand down message to {len(responders)} responders.")
         for responder_id in responders:
             send_meshtastic_message(stand_down_message, destination_id=responder_id)
     
-    # 4. Clear the SOS status from node_status.json
-    update_sos_status(sender_id, None)
-    send_meshtastic_message(f"{PREFIX_BOT_RESPONSE} Your {active_sos_code} alert has been cleared.", destination_id=sender_id)
+    timestamp_str = get_formatted_timestamp()
+    original_user_name = active_sos_entry.get("user_info", {}).get("name", active_sos_entry.get("node_id"))
+    email_subject = f"[GuardianBridge STAND DOWN] {active_sos_code} Alert Cleared by {clearer_name}"
+    email_body = (
+        f"The {active_sos_code} alert originally triggered by {original_user_name} has been cleared.\n\n"
+        f"Cleared By: {clearer_name} ({sender_id})\n"
+        f"Time Cleared: {timestamp_str}\n\n"
+        "All responding units can stand down."
+    )
+    _queue_sos_email_notification(active_sos_code, email_subject, email_body)
+
+    if not admin_clear:
+        send_meshtastic_message(f"{PREFIX_BOT_RESPONSE} Your {active_sos_code} alert has been cleared.", destination_id=sender_id)
+
+def handle_sos_action_initial(sender_id, command):
+    global user_interaction_state
+    global user_interaction_state_lock
+    with file_lock(settings.SOS_LOG_FILE + ".lock"):
+        sos_log = load_json(settings.SOS_LOG_FILE) or []
+        active_sos_events = [e for e in sos_log if e.get("active")]
+
+    if not active_sos_events:
+        send_meshtastic_message(f"{PREFIX_BOT_RESPONSE} There are no active SOS alerts.", destination_id=sender_id)
+        return
+    
+    if len(active_sos_events) == 1:
+        target_sos_id = active_sos_events[0]['node_id']
+        if command in ACK_COMMANDS:
+            handle_sos_ack(sender_id, target_sos_id)
+        elif command in RESPONDING_COMMANDS:
+            handle_sos_responding(sender_id, target_sos_id)
+    else:
+        with user_interaction_state_lock:
+            user_interaction_state[sender_id] = "awaiting_sos_choice"
+            with subscribers_lock:
+                menu_text = "Multiple active alerts. Reply with command and number (e.g., ACK 2):\n"
+                for i, sos in enumerate(active_sos_events, 1):
+                    sender_name = subscribers.get(sos['node_id'], {}).get('name', sos['node_id'])
+                    menu_text += f"{i}. {sos['sos_type']} from {sender_name}\n"
+            send_meshtastic_message(menu_text, destination_id=sender_id, no_timestamp=True)
+
+def handle_sos_choice(responder_id, command, choice_num):
+    with file_lock(settings.SOS_LOG_FILE + ".lock"):
+        sos_log = load_json(settings.SOS_LOG_FILE) or []
+        active_sos_events = [e for e in sos_log if e.get("active")]
+    
+    if 0 < choice_num <= len(active_sos_events):
+        target_sos_id = active_sos_events[choice_num - 1]['node_id']
+        if command.upper() in ACK_COMMANDS:
+            handle_sos_ack(responder_id, target_sos_id)
+        elif command.upper() in RESPONDING_COMMANDS:
+            handle_sos_responding(responder_id, target_sos_id)
+    else:
+        send_meshtastic_message(f"{PREFIX_BOT_RESPONSE} Invalid selection. Please try again.", destination_id=responder_id)
+
+def handle_sos_ack(responder_id, target_sos_id):
+    with file_lock(settings.SOS_LOG_FILE + ".lock"):
+        sos_log = load_json(settings.SOS_LOG_FILE) or []
+        active_sos = next((e for e in sos_log if e.get("node_id") == target_sos_id and e.get("active")), None)
+        if not active_sos: return
+
+        if responder_id not in active_sos.get("acknowledged_by", []):
+            active_sos.setdefault("acknowledged_by", []).append(responder_id)
+            save_json(settings.SOS_LOG_FILE, sos_log)
+            logging.info(f"SOS from {target_sos_id} acknowledged by {responder_id}.")
+            send_meshtastic_message(f"{PREFIX_BOT_RESPONSE} Your ACK has been logged.", destination_id=responder_id)
+        else:
+            send_meshtastic_message(f"{PREFIX_BOT_RESPONSE} You have already acknowledged this alert.", destination_id=responder_id)
+
+def handle_sos_responding(responder_id, target_sos_id):
+    with file_lock(settings.SOS_LOG_FILE + ".lock"):
+        sos_log = load_json(settings.SOS_LOG_FILE) or []
+        active_sos = next((e for e in sos_log if e.get("node_id") == target_sos_id and e.get("active")), None)
+        if not active_sos:
+            logging.warning(f"Received RESPONDING from {responder_id} for inactive/invalid SOS {target_sos_id}.")
+            return
+
+        active_sos.setdefault("responding_list", [])
+        if responder_id in active_sos["responding_list"]:
+            logging.info(f"User {responder_id} is already marked as responding. Ignoring duplicate command.")
+            send_meshtastic_message(f"{PREFIX_BOT_RESPONSE} You are already marked as responding to this alert.", destination_id=responder_id)
+            return
+            
+        active_sos["responding_list"].append(responder_id)
+        if "acknowledged_by" in active_sos and responder_id in active_sos["acknowledged_by"]:
+             active_sos["acknowledged_by"].remove(responder_id)
+        save_json(settings.SOS_LOG_FILE, sos_log)
+
+    with subscribers_lock:
+        responder_name = subscribers.get(responder_id, {}).get('name', responder_id)
+        sos_user_name = active_sos.get("user_info", {}).get("name", active_sos["node_id"])
+    
+    update_msg = f"[SOS UPDATE] {responder_name} is now also responding to the {active_sos['sos_type']} from {sos_user_name}."
+    logging.info(update_msg)
+    
+    with subscribers_lock:
+        all_participants = set(active_sos.get('acknowledged_by', []) + active_sos.get('responding_list', []))
+        tagged_responders = {node_id for node_id, data in subscribers.items() if active_sos['sos_type'] in data.get('tags', [])}
+        responders_to_notify = (all_participants.union(tagged_responders)) - {responder_id}
+
+    for r_id in responders_to_notify:
+        send_meshtastic_message(update_msg, destination_id=r_id)
+
+    sos_author_id = active_sos.get("node_id")
+    if sos_author_id:
+        with subscribers_lock:
+            responding_names = [subscribers.get(r_id, {}).get('name', r_id) for r_id in active_sos["responding_list"]]
+        names_str = ", ".join(responding_names)
+        confirmation_for_author = f"{PREFIX_BOT_RESPONSE} Help is on the way. Responding: {names_str}."
+        send_meshtastic_message(confirmation_for_author, destination_id=sos_author_id)
+    
+    send_meshtastic_message(f"{PREFIX_BOT_RESPONSE} You are now marked as responding.", destination_id=responder_id)
+
+def handle_sos_checkin_response(sender_id):
+    with file_lock(settings.SOS_LOG_FILE + ".lock"):
+        sos_log = load_json(settings.SOS_LOG_FILE) or []
+        active_sos = next((e for e in sos_log if e.get("node_id") == sender_id and e.get("active")), None)
+        if not active_sos: return
+        
+        active_sos["last_checkin_time"] = datetime.now(local_tz).isoformat()
+        active_sos["checkin_attempts"] = 0
+        save_json(settings.SOS_LOG_FILE, sos_log)
+        logging.info(f"Received check-in response from {sender_id}. Resetting attempt counter.")
 
 def process_command_file(filepath):
     error_dir = os.path.join(settings.COMMANDS_DIR, "error")
@@ -914,12 +1166,11 @@ def process_command_file(filepath):
             else:
                 logging.warning(f"No subscribers found for tags {target_tags}. Message not sent.")
         
-        # --- NEW: Handler for Admin Clear SOS Command ---
         elif cmd == "admin_clear_sos":
             node_id = command_data.get("node_id")
             if node_id:
                 logging.info(f"Processing admin request to clear SOS for node: {node_id}")
-                handle_sos_clear(node_id)
+                handle_sos_clear(node_id, admin_clear=True)
             else:
                 quarantine_file("Missing 'node_id' for admin_clear_sos command.")
                 return
@@ -940,6 +1191,69 @@ def handle_preexisting_commands():
     for filename in os.listdir(command_dir):
         if filename.endswith('.json'):
             process_command_file(os.path.join(command_dir, filename))
+
+def handle_active_sos_tasks(now):
+    with file_lock(settings.SOS_LOG_FILE + ".lock"):
+        sos_log = load_json(settings.SOS_LOG_FILE) or []
+        active_sos_events = [e for e in sos_log if e.get("active")]
+        
+        if not active_sos_events:
+            return
+            
+        log_needs_saving = False
+        
+        for active_sos in active_sos_events:
+            if not active_sos.get("acknowledged_by") and not active_sos.get("responding_list") and not active_sos.get("escalated_no_ack", False):
+                sos_start_time = datetime.fromisoformat(active_sos["timestamp"])
+                if (now - sos_start_time).total_seconds() > settings.SOS_ACK_TIMEOUT_MINS * 60:
+                    logging.warning(f"SOS from {active_sos['node_id']} has not been acknowledged after {settings.SOS_ACK_TIMEOUT_MINS} mins. Escalating network-wide.")
+                    
+                    sender_name = active_sos.get("user_info", {}).get("name", active_sos["node_id"])
+                    payload = active_sos.get("message_payload", "")
+                    
+                    location_info = "Location not available."
+                    lat, lon = active_sos.get("latitude"), active_sos.get("longitude")
+                    if lat and lon:
+                        location_info = f"LKP: https://www.google.com/maps?q={lat},{lon}"
+
+                    alert_msg_1 = f"{PREFIX_SOS} {active_sos['sos_type']} from {sender_name}" + (f": {payload}" if payload else "")
+                    alert_msg_2 = f"{PREFIX_SOS} {location_info}"
+                    
+                    broadcast_to_subscribers(f"[WIDE ALERT] {alert_msg_1}", "alerts")
+                    time.sleep(MIN_SEND_INTERVAL_SECONDS)
+                    broadcast_to_subscribers(f"[WIDE ALERT] {alert_msg_2}", "alerts")
+
+                    active_sos["escalated_no_ack"] = True
+                    log_needs_saving = True
+
+            last_checkin_time = datetime.fromisoformat(active_sos.get("last_checkin_time"))
+            if (now - last_checkin_time).total_seconds() > settings.SOS_CHECKIN_INTERVAL_MINS * 60:
+                attempts = active_sos.get("checkin_attempts", 0)
+                if attempts >= settings.SOS_CHECKIN_MAX_ATTEMPTS:
+                    if not active_sos.get("escalated_unresponsive", False):
+                        logging.warning(f"SOS user {active_sos['node_id']} is UNRESPONSIVE. Escalating alert.")
+                        sender_name = active_sos.get("user_info", {}).get("name", active_sos["node_id"])
+                        
+                        with subscribers_lock:
+                            all_participants = set(active_sos.get('acknowledged_by', []) + active_sos.get('responding_list', []))
+                            tagged_responders = {node_id for node_id, data in subscribers.items() if active_sos['sos_type'] in data.get('tags', [])}
+                            responders_to_notify = all_participants.union(tagged_responders)
+                        
+                        escalation_msg = f"[SOS ESCALATION] User {sender_name} is UNRESPONSIVE. Last check-in failed."
+                        for r_id in responders_to_notify:
+                            send_meshtastic_message(escalation_msg, destination_id=r_id)
+
+                        active_sos["escalated_unresponsive"] = True
+                        log_needs_saving = True
+                else:
+                    logging.info(f"Sending check-in ping to {active_sos['node_id']} (Attempt {attempts + 1})")
+                    send_meshtastic_message("[CHECK-IN] Are you OK? Please reply Y if you are.", destination_id=active_sos['node_id'])
+                    active_sos["last_checkin_time"] = now.isoformat()
+                    active_sos["checkin_attempts"] = attempts + 1
+                    log_needs_saving = True
+
+        if log_needs_saving:
+            save_json(settings.SOS_LOG_FILE, sos_log)
 
 def main():
     global iface, subscribers, dispatcher_state, gateway_node_id, broadcasted_alert_headlines
@@ -994,6 +1308,7 @@ def main():
             now = datetime.now(local_tz)
             update_dispatcher_status()
             update_node_statuses() 
+            handle_active_sos_tasks(now)
             handle_nws_alert_broadcasts(now)
             handle_periodic_weather_broadcasts(now)
             handle_daily_forecasts(now)

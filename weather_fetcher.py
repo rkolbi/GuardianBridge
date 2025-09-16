@@ -135,8 +135,7 @@ if __name__ == "__main__":
             data = {
                 "temperature_f": round((temp_c * 9/5) + 32) if temp_c is not None else "N/A",
                 "humidity": round(humidity) if humidity is not None else "N/A",
-                # --- TIMESTAMP CHANGE ---
-                "timestamp": datetime.datetime.now(local_tz).strftime("%H:%M %m/%d")
+                "timestamp": datetime.datetime.utcnow().isoformat()
             }
             save_json(settings.WEATHER_CURRENT_FILE, data)
         else:
@@ -144,8 +143,7 @@ if __name__ == "__main__":
             data = {
                 "temperature_f": "N/A",
                 "humidity": "N/A",
-                # --- TIMESTAMP CHANGE ---
-                "timestamp": datetime.datetime.now(local_tz).strftime("%H:%M %m/%d")
+                "timestamp": datetime.datetime.utcnow().isoformat()
             }
             save_json(settings.WEATHER_CURRENT_FILE, data)
 
@@ -153,7 +151,7 @@ if __name__ == "__main__":
             forecast = fetch_forecast_periods(forecast_url)
             forecast_data = {
                 # --- TIMESTAMP CHANGE ---
-                "timestamp": datetime.datetime.now(local_tz).strftime("%H:%M %m/%d"),
+                "timestamp": datetime.datetime.utcnow().isoformat(),
                 "periods": forecast
             }
             save_json(settings.WEATHER_FORECAST_FILE, forecast_data)
@@ -174,5 +172,4 @@ if __name__ == "__main__":
         Path(settings.WEATHER_FETCHER_LASTRUN_FILE).touch()
     except Exception as e:
         logging.error(f"Could not create .lastrun file: {e}")
-                                                                                                                                                                     
     logging.info("Weather fetch cycle complete.")

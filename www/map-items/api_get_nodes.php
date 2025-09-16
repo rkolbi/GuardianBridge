@@ -1,66 +1,122 @@
 <?php
-ini_set('display_errors', 0); // Production should not display errors
-error_reporting(0);
+/**
+ * GuardianBridge - A Meshtastic Gateway for Community Resilience
+ * Copyright (C) 2025 Robert Kolbasowski
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 
-// api_get_nodes.php
-// This secure API endpoint provides combined node status and subscriber data.
+// GuardianBridge - api_get_nodes.php (v1.3.0)
 
+header('Content-Type: application/json');
 session_start();
 
-// --- SECURITY CHECK ---
 if (!isset($_SESSION['loggedin']) || $_SESSION['loggedin'] !== true) {
     header('HTTP/1.1 403 Forbidden');
     die(json_encode(['error' => 'Authentication required.']));
 }
 
-// --- CONFIGURATION ---
 $base_dir = '/opt/GuardianBridge';
 $data_dir = $base_dir . '/data';
 $node_status_file = $data_dir . '/node_status.json';
 $subscribers_file = $data_dir . '/subscribers.json';
+$sos_log_file = $data_dir . '/sos_log.json';
 
-// --- HELPER FUNCTION ---
-function load_json_data($file_path) {
-    if (!is_readable($file_path)) return [];
-    $content = @file_get_contents($file_path);
-    if ($content === false) return [];
-    return json_decode($content, true) ?? [];
+function get_locked_json_file($file_path, $default_value = []) {
+    if (!is_readable($file_path)) { return $default_value; }
+    $fp = @fopen($file_path, 'r');
+    if (!$fp) { return $default_value; }
+    $data = $default_value;
+    if (flock($fp, LOCK_SH)) {
+        $content = stream_get_contents($fp);
+        flock($fp, LOCK_UN);
+        if ($content !== false && !empty(trim($content))) {
+            $decoded = json_decode($content, true);
+            if (json_last_error() === JSON_ERROR_NONE) {
+                $data = $decoded;
+            }
+        }
+    }
+    fclose($fp);
+    return $data;
 }
 
-// --- DATA RETRIEVAL & MERGING ---
-$node_statuses = load_json_data($node_status_file);
-$subscribers = load_json_data($subscribers_file);
+$node_statuses = get_locked_json_file($node_status_file, []);
+$subscribers = get_locked_json_file($subscribers_file, []);
+$sos_log = get_locked_json_file($sos_log_file, []);
 
-$combined_data = [];
+$active_sos_events = [];
+if (is_array($sos_log)) {
+    foreach ($sos_log as $entry) {
+        if (!empty($entry['active'])) {
+            $active_sos_events[] = $entry;
+        }
+    }
+}
 
-// Use the full subscriber list as the master list to include offline nodes
-foreach ($subscribers as $node_id => $subscriber_info) {
-    $status = $node_statuses[$node_id] ?? [];
-    
-    $combined_data[$node_id] = [
-        // Core status info
-        'node_id' => $node_id,
-        'lastHeard' => $status['lastHeard'] ?? null,
-        'snr' => $status['snr'] ?? 'N/A',
-        'hopsAway' => $status['hopsAway'] ?? 'N/A',
-        'role' => $status['role'] ?? 'OFFLINE',
-        'latitude' => $status['latitude'] ?? null,
-        'longitude' => $status['longitude'] ?? null,
-        'sos' => $status['sos'] ?? null,
+$output_nodes = [];
+if (is_array($node_statuses)) {
+    foreach ($node_statuses as $node_id => $status) {
+        $user_data = $subscribers[$node_id] ?? [];
         
-        // Subscriber info for popups
-        'name' => $subscriber_info['name'] ?? null,
-        'full_name' => $subscriber_info['full_name'] ?? null,
-        'phone_1' => $subscriber_info['phone_1'] ?? null,
-        'phone_2' => $subscriber_info['phone_2'] ?? null,
-        'email' => $subscriber_info['email'] ?? null, 
-        'address' => $subscriber_info['address'] ?? null,
-        'notes' => $subscriber_info['notes'] ?? null,
-    ];
+        $sos_role = 'NONE';
+        $sos_parent = null;
+        $sos_message_payload = '';
+
+        foreach ($active_sos_events as $sos) {
+            if ($node_id === ($sos['node_id'] ?? null)) {
+                $sos_role = 'SENDER';
+                $sos_message_payload = $sos['message_payload'] ?? '';
+                break;
+            }
+            if (in_array($node_id, $sos['responding_list'] ?? [])) {
+                $sos_role = 'RESPONDER';
+                $sos_parent = $sos['node_id'];
+                break;
+            }
+            if (in_array($node_id, $sos['acknowledged_by'] ?? [])) {
+                $sos_role = 'ACKNOWLEDGER';
+                $sos_parent = $sos['node_id'];
+                break;
+            }
+        }
+
+        $node_info = [
+            'node_id' => $node_id,
+            'name' => $user_data['name'] ?? null,
+            'full_name' => $user_data['full_name'] ?? null,
+            'lastHeard' => $status['lastHeard'] ?? null,
+            'snr' => $status['snr'] ?? null,
+            'hopsAway' => $status['hopsAway'] ?? null,
+            'role' => $status['role'] ?? 'UNKNOWN',
+            'latitude' => $status['latitude'] ?? null,
+            'longitude' => $status['longitude'] ?? null,
+            'sos' => $status['sos'] ?? null,
+            'address' => $user_data['address'] ?? null,
+            'phone_1' => $user_data['phone_1'] ?? null,
+            'phone_2' => $user_data['phone_2'] ?? null,
+            'email' => $user_data['email'] ?? null,
+            'notes' => $user_data['notes'] ?? null,
+            'poc_info' => $user_data['poc_info'] ?? null,
+            'sos_notify' => $user_data['sos_notify'] ?? null,
+            'sos_role' => $sos_role,
+            'sos_parent' => $sos_parent,
+            'sos_message_payload' => $sos_message_payload
+        ];
+        $output_nodes[] = $node_info;
+    }
 }
 
-
-// --- SEND RESPONSE ---
-header('Content-Type: application/json');
-echo json_encode(array_values($combined_data)); // Return as a simple array for easier JS iteration
-exit;
+echo json_encode($output_nodes);
+?>
