@@ -318,12 +318,17 @@ def send_pending_outgoing_emails():
                     sender_name = sender_info.get("name", sender_node_id)
                     full_body = ""
 
-                    if msg_data.get("is_sos"):
-                        footer = (
-                            "\n\n- GuardianBridge automated processing is currently in beta. "
-                            "Do not use it for critical or time-sensitive communication."
-                        )
-                        full_body = f"{original_body}{footer}"
+                    # If the message is an SOS alert, append the custom instructions.
+                    if msg_data.get("is_sos", False):
+                        instructions_body = ""
+                        if os.path.exists(settings.SOS_EMAIL_INSTRUCTIONS_FILE):
+                            try:
+                                with open(settings.SOS_EMAIL_INSTRUCTIONS_FILE, 'r') as f:
+                                    instructions_body = f.read()
+                            except Exception as e:
+                                logging.error(f"Could not read SOS instructions file: {e}")
+                        
+                        full_body = f"{original_body}\n\n{instructions_body}"
                     else:
                         try:
                             tz = pytz.timezone(get_localzone_name())
