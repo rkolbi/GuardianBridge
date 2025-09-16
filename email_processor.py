@@ -317,8 +317,8 @@ def send_pending_outgoing_emails():
                     sender_info = subscribers.get(sender_node_id, {})
                     sender_name = sender_info.get("name", sender_node_id)
                     full_body = ""
-
-                    # If the message is an SOS alert, append the custom instructions.
+                    
+                    # If the message is an SOS alert, use only the original body and the custom instructions.
                     if msg_data.get("is_sos", False):
                         instructions_body = ""
                         if os.path.exists(settings.SOS_EMAIL_INSTRUCTIONS_FILE):
@@ -327,9 +327,9 @@ def send_pending_outgoing_emails():
                                     instructions_body = f.read()
                             except Exception as e:
                                 logging.error(f"Could not read SOS instructions file: {e}")
-                        
                         full_body = f"{original_body}\n\n{instructions_body}"
                     else:
+                        # For regular messages, construct the header and footer.
                         try:
                             tz = pytz.timezone(get_localzone_name())
                             now = datetime.now(tz)
@@ -337,12 +337,10 @@ def send_pending_outgoing_emails():
                         except Exception:
                             now = datetime.utcnow()
                             timestamp_str = now.strftime("%H:%M %m/%d UTC")
-                        
                         header = (
                             f"GuardianBridge Notification\n"
                             f"At {timestamp_str}, {sender_name} ({sender_node_id}) sent the following message:\n\n"
                         )
-                        
                         footer = (
                             f"\n\nHow to Reply:\n"
                             f"To ensure your response is successfully delivered, please send a new email with the following details:\n"
