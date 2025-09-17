@@ -93,7 +93,7 @@ broadcasted_alert_headlines = set()
 # --- Message Sending Queue ---
 send_queue = Queue()
 command_queue = Queue()
-MIN_SEND_INTERVAL_SECONDS = 1.1 # A little over 1 second to be safe
+MIN_SEND_INTERVAL_SECONDS = 1.1
 
 # --- Watchdog event handler with debouncing ---
 watchdog_event_lock = threading.Lock()
@@ -130,12 +130,11 @@ class MasterFileEventHandler(FileSystemEventHandler):
 # --- UTILITY FUNCTIONS ---
 @contextmanager
 def file_lock(lock_file_path):
-    """A context manager for file-based locking."""
     if os.path.exists(lock_file_path):
         logging.warning(f"Lock file {lock_file_path} already exists. Waiting...")
     
     retry_count = 0
-    while retry_count < 10: # Wait for a maximum of 1 second
+    while retry_count < 10:
         try:
             fd = os.open(lock_file_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             os.close(fd)
@@ -153,7 +152,6 @@ def file_lock(lock_file_path):
             os.remove(lock_file_path)
 
 def save_json_locked(path, data):
-    """Saves JSON to a file with a lock."""
     lock_path = path + ".lock"
     with file_lock(lock_path):
         save_json(path, data)
@@ -204,21 +202,16 @@ def log_channel_message(sender_id, text, is_dm=False):
         logging.debug(f"Logged message from {sender_id} (DM: {is_dm})")
 
 def send_meshtastic_message(text, **kwargs):
-    """Queues a message to be sent by the sender thread."""
     kwargs['text'] = text
     send_queue.put(kwargs)
 
 def sender_thread_worker():
-    """
-    The dedicated sender thread. Processes the send_queue to send messages
-    one by one, respecting the send interval.
-    """
     global node_last_heard_cache
     logging.info("Sender thread started.")
     while True:
         try:
             kwargs = send_queue.get()
-            if kwargs is None: # Shutdown signal
+            if kwargs is None:
                 break
 
             start_time = time.time()
@@ -233,10 +226,7 @@ def sender_thread_worker():
                 try:
                     iface.sendText(**kwargs)
                     logging.info(f"Sent: '{text}' -> {destination_id or 'Broadcast'}")
-                    if destination_id:
-                        node_last_heard_cache[destination_id] = time.time()
                 except meshtastic.MeshtasticException as e:
-                    # This is a common exception type from the library, handle it specifically
                     logging.warning(f"Failed to send message to {destination_id}: {e}. Queuing for retry.")
                     if destination_id:
                         with dm_queue_lock:
@@ -244,11 +234,8 @@ def sender_thread_worker():
                             queue.append({"destination_id": destination_id, "text": text, "timestamp": datetime.now(local_tz).isoformat()})
                             save_json(settings.FAILED_DM_QUEUE_FILE, queue)
                 except Exception as e:
-                    # Catch any other unexpected errors during send
                     logging.error(f"Unexpected error sending message to {destination_id}: {e}", exc_info=True)
 
-            
-            # Enforce minimum interval between sends
             elapsed = time.time() - start_time
             if elapsed < MIN_SEND_INTERVAL_SECONDS:
                 time.sleep(MIN_SEND_INTERVAL_SECONDS - elapsed)
@@ -257,7 +244,6 @@ def sender_thread_worker():
             logging.error(f"Error in sender thread: {e}", exc_info=True)
 
 def get_command_handler(text):
-    """Determines the correct handler for a given command text."""
     text_upper = text.upper()
     
     sos_command = next((cmd for cmd in SOS_COMMANDS if text_upper.startswith(cmd)), None)
@@ -277,15 +263,11 @@ def get_command_handler(text):
     return handle_meshtastic_command, (text,)
 
 def command_processor_worker():
-    """
-    Processes incoming commands from the command_queue to avoid blocking
-    the main Meshtastic listener thread. Also handles command cooldown.
-    """
     logging.info("Command processor thread started.")
     while True:
         try:
             sender, text = command_queue.get()
-            if sender is None: # Shutdown signal
+            if sender is None:
                 break
 
             current_time = time.time()
@@ -368,7 +350,6 @@ def update_node_statuses(now=None):
     logging.debug(f"Updated node status file for {len(node_statuses)} nodes.")
 
 def update_sos_status(node_id, sos_code):
-    """Updates the SOS status for a node in node_status.json."""
     node_statuses = load_json(settings.NODE_STATUS_FILE) or {}
     if node_id not in node_statuses:
         node_statuses[node_id] = {}
@@ -492,7 +473,7 @@ def handle_daily_forecasts(now):
         broadcast_time = datetime.strptime(time_str, "%H:%M").time()
         if now.time().hour != broadcast_time.hour or now.time().minute != broadcast_time.minute:
             continue
-        last_sent_date_str = dispatcher_state.get(f"forecast_{time_str}_sent_date") # No lock needed for read
+        last_sent_date_str = dispatcher_state.get(f"forecast_{time_str}_sent_date")
         if last_sent_date_str == str(now.date()):
             continue
         logging.info(f"Attempting to broadcast scheduled forecast for {time_str}.")
@@ -524,8 +505,8 @@ def handle_daily_forecasts(now):
 def handle_nws_alert_broadcasts(now):
     global dispatcher_state
     if now.minute % settings.WEATHER_ALERT_INTERVAL_MINS == 0:
-        last_sent_iso = dispatcher_state.get("last_nws_alert_reminder") # No lock needed for read
-        last_sent_time = datetime.fromisoformat(last_sent_iso) if last_sent_iso else datetime.min.replace(tzinfo=pytz.UTC) # type: ignore
+        last_sent_iso = dispatcher_state.get("last_nws_alert_reminder")
+        last_sent_time = datetime.fromisoformat(last_sent_iso) if last_sent_iso else datetime.min.replace(tzinfo=pytz.UTC)
         if (now - last_sent_time).total_seconds() > 60:
             alerts_data = load_json(settings.WEATHER_ALERTS_FILE) or []
             active_headlines = {alert.get("headline") for alert in alerts_data if alert.get("headline")}
@@ -606,8 +587,17 @@ def parse_command_text(text: str) -> tuple[str, str]:
     args = parts[1].strip() if len(parts) > 1 else ""
     return command_word, args
 
+# --- NEW: Admin check helper function ---
+def is_admin(sender_id):
+    """Checks if the sender has admin privileges by looking for an 'ADMIN' tag."""
+    with subscribers_lock:
+        user_data = subscribers.get(sender_id, {})
+        # Ensure tags are treated as a list and the check is case-insensitive
+        tags = [tag.upper() for tag in user_data.get("tags", [])]
+        return "ADMIN" in tags
+
 def _cmd_get_forecast(sender, args):
-    return {"response": get_current_forecast_message(), "no_prefix": True} # type: ignore
+    return {"response": get_current_forecast_message(), "no_prefix": True}
 
 def _cmd_subscribe(sender, args):
     with subscribers_lock:
@@ -725,7 +715,7 @@ def _cmd_tagsend(sender, args):
         return f"No users found with tags: {', '.join(target_tags)}"
     formatted_message = f"[Tags: {', '.join(target_tags)}] From {sender_name}:\n{message}"
     for recipient_id in recipient_ids:
-        send_meshtastic_message(formatted_message, destination_id=recipient_id)
+        send_meshtastic_message(formatted_message, destinationId=recipient_id)
     return None
 
 def _cmd_help(sender, args):
@@ -735,7 +725,6 @@ def _cmd_help(sender, args):
             "email/to/subj/body\ntagsend/tags/msg")
 
 def _cmd_sos_status(sender, args):
-    """Checks for and reports on all currently active SOS alerts."""
     with file_lock(settings.SOS_LOG_FILE + ".lock"):
         sos_log = load_json(settings.SOS_LOG_FILE) or []
         active_sos_events = [e for e in sos_log if e.get("active")]
@@ -753,6 +742,50 @@ def _cmd_sos_status(sender, args):
     
     return "\n".join(response_parts)
 
+# --- NEW: Admin command for email blocklist ---
+def _cmd_block_email(sender, args):
+    if not is_admin(sender):
+        return "Access Denied."
+    
+    blocklist_path = settings.EMAIL_BLOCKLIST_FILE
+    
+    if not args: # List current blocklist
+        blocked_emails = load_json(blocklist_path) or []
+        if not blocked_emails:
+            return "Email blocklist is empty."
+        else:
+            return "Blocked:\n" + "\n".join(blocked_emails)
+            
+    email_to_block = args.strip().lower()
+    with file_lock(blocklist_path + ".lock"):
+        blocked_emails = load_json(blocklist_path) or []
+        if email_to_block not in blocked_emails:
+            blocked_emails.append(email_to_block)
+            save_json(blocklist_path, blocked_emails)
+            return f"Blocked: {email_to_block}"
+        else:
+            return f"{email_to_block} is already blocked."
+
+# --- NEW: Admin command for email unblocking ---
+def _cmd_unblock_email(sender, args):
+    if not is_admin(sender):
+        return "Access Denied."
+        
+    if not args:
+        return "Usage: unblock/email@address.com"
+        
+    blocklist_path = settings.EMAIL_BLOCKLIST_FILE
+    email_to_unblock = args.strip().lower()
+    
+    with file_lock(blocklist_path + ".lock"):
+        blocked_emails = load_json(blocklist_path) or []
+        if email_to_unblock in blocked_emails:
+            blocked_emails.remove(email_to_unblock)
+            save_json(blocklist_path, blocked_emails)
+            return f"Unblocked: {email_to_unblock}"
+        else:
+            return f"{email_to_unblock} was not on the blocklist."
+
 COMMAND_HANDLERS = {
     "subscribe": _cmd_subscribe, "unsubscribe": _cmd_unsubscribe,
     "name": _cmd_set_name,
@@ -765,7 +798,9 @@ COMMAND_HANDLERS = {
     "wx": _cmd_get_forecast,
     "?": _cmd_help,
     "active": _cmd_sos_status,
-    "alertstatus": _cmd_sos_status
+    "alertstatus": _cmd_sos_status,
+    "block": _cmd_block_email,
+    "unblock": _cmd_unblock_email,
 }
 
 def handle_meshtastic_command(sender, command_text):
@@ -776,12 +811,12 @@ def handle_meshtastic_command(sender, command_text):
     if handler:
         logging.info(f"Processing command '{command_word}' with args '{args}' for sender {sender}")
         result = handler(sender, args)
-        if result is not None: # type: ignore
+        if result is not None:
             response, add_bot_prefix = result, True
             if isinstance(result, dict):
                 response, add_bot_prefix = result.get("response"), not result.get("no_prefix")
             if response:
-                full_response = f"{PREFIX_BOT_RESPONSE} {response}" if add_bot_prefix else response # type: ignore
+                full_response = f"{PREFIX_BOT_RESPONSE} {response}" if add_bot_prefix else response
                 send_meshtastic_message(full_response, destinationId=sender, wantAck=True)
 
 def retry_queued_messages_for_node(node_id):
@@ -827,14 +862,11 @@ def on_meshtastic_message(packet, interface):
             return
 
     if text.startswith(BOT_MESSAGE_PREFIXES):
-        return # Ignore messages that are clearly from the bot itself
+        return
 
-    # Offload the actual processing to the command processor thread
-    # to keep the listener thread free.
     command_queue.put((sender, text))
 
 def _queue_sos_email_notification(sos_code, subject, body, extra_recipients=None):
-    """A centralized helper to queue SOS-related email notifications."""
     email_enabled_map = {
         "SOS": settings.SOS_EMAIL_ENABLED, "SOSM": settings.SOSM_EMAIL_ENABLED,
         "SOSF": settings.SOSF_EMAIL_ENABLED, "SOSP": settings.SOSP_EMAIL_ENABLED
@@ -864,7 +896,7 @@ def _queue_sos_email_notification(sos_code, subject, body, extra_recipients=None
                 "subject": subject, 
                 "body": body, 
                 "sender_node": "GuardianBridge",
-                "is_sos": True # All emails sent through this function are SOS-related
+                "is_sos": True
             }
             outgoing.append(task)
         save_json(settings.OUTGOING_EMAIL_FILE, outgoing)
@@ -920,12 +952,10 @@ def handle_sos_alert(sender_id, sos_code, message_payload):
                     if found_id:
                         mesh_recipients.add(found_id)
     
-    # --- Construct Mesh Alert Messages ---
     location_info = f"LKP: https://www.google.com/maps?q={lat},{lon}" if lat and lon else "Location not available."
     alert_message_1 = f"{PREFIX_SOS} {sos_code} from {sender_name}" + (f": {message_payload}" if message_payload else "")
     alert_message_2 = f"{PREFIX_SOS} {location_info}"
 
-    # Construct the third message with detailed user info in the specified multi-line format
     info_parts = []
     if sender_info.get('full_name'):
         info_parts.append(sender_info['full_name'])
@@ -950,13 +980,11 @@ def handle_sos_alert(sender_id, sos_code, message_payload):
         info_string = "\n".join(info_parts)
         full_info_message = f"{PREFIX_SOS} INFO:\n{info_string}"
         
-        # Truncate if necessary to fit Meshtastic packet
         max_len = 200
         if len(full_info_message.encode('utf-8')) > max_len:
             overhead = len(f"{PREFIX_SOS} INFO:\n...".encode('utf-8'))
             info_string_bytes = info_string.encode('utf-8')
             truncated_bytes = info_string_bytes[:max_len - overhead]
-            # Avoid cutting a line in half
             info_string = truncated_bytes.decode('utf-8', 'ignore').rsplit('\n', 1)[0]
             full_info_message = f"{PREFIX_SOS} INFO:\n{info_string}..."
         alert_message_3 = full_info_message
@@ -1039,9 +1067,8 @@ def handle_sos_clear(sender_id, admin_clear=False):
     timestamp_str = get_formatted_timestamp()
     original_user_name = active_sos_entry.get("user_info", {}).get("name", active_sos_entry.get("node_id"))
     message_payload = active_sos_entry.get("message_payload", "")
-    payload_str = f": {message_payload}" if message_payload else "" # This line is no longer used for the subject but is kept for potential future use.
+    payload_str = f": {message_payload}" if message_payload else ""
     
-    # Format: [GuardianBridge STAND DOWN] SOSP from bmkolbi: Testing the SOS email system
     email_subject = f"[GuardianBridge STAND DOWN] {active_sos_code} from {original_user_name}{payload_str}"
     email_body = (
         f"The {active_sos_code} alert originally triggered by {original_user_name} has been cleared.\n\n"
@@ -1049,7 +1076,6 @@ def handle_sos_clear(sender_id, admin_clear=False):
         f"Time Cleared: {timestamp_str}\n\n"
         "All responding units can stand down."
     )
-    # All emails sent via this function should use the SOS format.
     _queue_sos_email_notification(active_sos_code, email_subject, email_body)
 
     if not admin_clear:
@@ -1304,9 +1330,6 @@ def handle_active_sos_tasks(now):
             save_json(settings.SOS_LOG_FILE, sos_log)
 
 def run_periodic_task(target_func, interval_seconds, name):
-    """
-    A generic wrapper to run a function periodically in its own thread.
-    """
     logging.info(f"Starting periodic task '{name}' with interval of {interval_seconds} seconds.")
     while True:
         try:
@@ -1315,7 +1338,6 @@ def run_periodic_task(target_func, interval_seconds, name):
         except Exception as e:
             logging.error(f"Error in periodic task '{name}': {e}", exc_info=True)
         
-        # Sleep until the next full interval
         time.sleep(interval_seconds - (time.time() % interval_seconds))
 
 def main():
@@ -1366,17 +1388,14 @@ def main():
     handle_periodic_weather_broadcasts(now, initial_broadcast=True)
     logging.info("Initial broadcasts complete. Starting main loop.")
 
-    # --- Start the dedicated sender thread ---
     sender_thread = threading.Thread(target=sender_thread_worker, daemon=True)
     sender_thread.start()
 
-    # --- Start the dedicated command processor thread ---
     command_processor_thread = threading.Thread(target=command_processor_worker, daemon=True)
     command_processor_thread.start()
 
-    # --- Threaded Periodic Tasks ---
     tasks = [
-        threading.Thread(target=run_periodic_task, args=(update_node_statuses, 60, 'update_node_statuses'), daemon=True), # Pass now=None
+        threading.Thread(target=run_periodic_task, args=(update_node_statuses, 60, 'update_node_statuses'), daemon=True),
         threading.Thread(target=run_periodic_task, args=(handle_active_sos_tasks, 60, 'handle_active_sos_tasks'), daemon=True),
         threading.Thread(target=run_periodic_task, args=(handle_nws_alert_broadcasts, 60, 'handle_nws_alert_broadcasts'), daemon=True),
         threading.Thread(target=run_periodic_task, args=(handle_periodic_weather_broadcasts, 60, 'handle_periodic_weather_broadcasts'), daemon=True),
@@ -1390,19 +1409,18 @@ def main():
 
     try:
         while True:
-            # The main thread now primarily keeps the script alive while background threads do the work.
-            time.sleep(3600) # Sleep for a long time, as the work is in other threads.
+            time.sleep(3600)
     except KeyboardInterrupt:
         logging.info("KeyboardInterrupt detected. Shutting down...")
     finally:
         logging.info("Stopping observer thread.")
         observer.stop()
         observer.join()
-        command_queue.put((None, None)) # Signal command processor to shut down
-        send_queue.put(None) # Signal sender thread to shut down
-        iface_ref = iface # Keep a reference to close it
-        iface = None # Signal other threads that the interface is gone
-        update_dispatcher_status() # Final status update
+        command_queue.put((None, None))
+        send_queue.put(None)
+        iface_ref = iface
+        iface = None
+        update_dispatcher_status()
         if iface_ref: iface_ref.close()
         logging.info("Shutdown complete.")
 

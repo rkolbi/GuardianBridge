@@ -307,7 +307,7 @@ function save_env_settings($file_path, $new_settings, $whitelist) {
     // Add any new settings that were not found in the original file
     foreach ($settings_to_update as $key => $value) {
         if (in_array($key, $whitelist)) {
-             $updated_lines[] = $key . '=' . $value;
+            $updated_lines[] = $key . '=' . $value;
         }
     }
 
@@ -534,7 +534,7 @@ directory.";
                     $error = "User '$node_id' already exists.";
                 }
             } else {
-                 $error = "Invalid Node ID format. Must be like '!a1b2c3d4'.";
+                $error = "Invalid Node ID format. Must be like '!a1b2c3d4'.";
             }
         }
 
@@ -585,7 +585,7 @@ directory.";
                 $jobs[$job_index] = $new_job;
                 
                 if (save_dispatcher_jobs($dispatcher_file, $jobs)) {
-                     $message = "Broadcast job '" . htmlspecialchars($new_job['name']) . "' updated successfully.";
+                    $message = "Broadcast job '" . htmlspecialchars($new_job['name']) . "' updated successfully.";
                 } else {
                     $error = "Failed to save broadcast jobs. Please check server logs.";
                 }
@@ -850,8 +850,8 @@ dashed #525355; color: #8E918F; font-size: 0.9rem; font-style: italic; padding: 
         <?php endif; ?>
         <?php if ($error): ?>
             <div class="bg-red-500/10 border border-red-500/20 text-red-300 px-4 py-3 rounded-lg relative mb-6 flex justify-between items-start" role="alert">
-                 <div><?= htmlspecialchars($error) ?></div>
-                 <button class="ml-4 -mt-1 -mr-1 text-2xl text-red-300/60 hover:text-red-300" onclick="this.parentElement.style.display='none'">&times;</button>
+                <div><?= htmlspecialchars($error) ?></div>
+                <button class="ml-4 -mt-1 -mr-1 text-2xl text-red-300/60 hover:text-red-300" onclick="this.parentElement.style.display='none'">&times;</button>
             </div>
         <?php endif; ?>
 
@@ -972,7 +972,7 @@ Weather Now</button></form>
                             </form>
                         </div>
                     </div>
-                     <div class="card p-6">
+                    <div class="card p-6">
                         <h2 class="text-2xl font-bold mb-4 text-slate-100">Outgoing Email Queue (<?= count($outgoing_emails) ?>)</h2>                        <?php if (!empty($outgoing_emails)): ?>
                             <div class="space-y-2 max-h-60 overflow-y-auto border border-slate-700 rounded-md p-3">
                                 <?php foreach($outgoing_emails as $email): ?>
@@ -1003,12 +1003,22 @@ Weather Now</button></form>
                                         <span class="font-medium text-slate-300">Queued:</span> <span class="text-slate-400"><?= htmlspecialchars(date("Y-m-d H:i:s",
 strtotime($dm['timestamp']))) ?></span><br>
                                         <span class="font-medium text-slate-300">Text:</span> <span class="text-slate-400"><?= htmlspecialchars($dm['text']) ?></span>                       
-             </div>
+            </div>
                                 <?php endforeach; ?>
                             </div>
                         <?php else: ?>
                             <p class="text-slate-500">The direct message queue is empty.</p>
                         <?php endif; ?>
+                    </div>
+                    <div class="card p-6 md:col-span-2">
+                        <h2 class="text-2xl font-bold mb-4 text-slate-100">Blocked Email Senders</h2>
+                        <div id="blocklist-container" class="space-y-2 mb-4 max-h-60 overflow-y-auto border border-slate-700 rounded-md p-3">
+                            <p class="text-slate-500">Loading blocklist...</p>
+                        </div>
+                        <form id="add-to-blocklist-form" class="flex items-center gap-4">
+                            <input type="email" id="new-blocked-email" placeholder="email-to-block@example.com" required class="flex-grow">
+                            <button type="submit" class="btn btn-primary">Add to Blocklist</button>
+                        </form>
                     </div>
                     <div class="card p-6 md:col-span-2">
                         <div class="flex justify-between items-center mb-4">
@@ -1119,7 +1129,7 @@ strtotime($dm['timestamp']))) ?></span><br>
             </div>
 
             <div id="users-content" class="tab-content" style="display: none;">
-                 <div class="card overflow-x-auto">
+                <div class="card overflow-x-auto">
                     <div class="p-6"><h2 class="text-2xl font-bold text-slate-100">Manage Subscribers</h2></div>
                     <table class="w-full text-left min-w-[1000px]">
                         <thead class="bg-black/20 border-b-2 border-slate-700/50">
@@ -1220,7 +1230,7 @@ htmlspecialchars(json_encode($user), ENT_QUOTES, 'UTF-8') ?>">
             <div id="settings-content" class="tab-content" style="display: none;">
                 <div class="card p-6">
                     <h2 class="text-2xl font-bold mb-4 text-slate-100">Manageable Settings</h2>
-                     <div class="bg-yellow-500/10 border border-yellow-500/20 text-yellow-300 p-4 rounded-lg mb-6">
+                    <div class="bg-yellow-500/10 border border-yellow-500/20 text-yellow-300 p-4 rounded-lg mb-6">
                         <strong>Important:</strong> After saving changes, you must restart the dispatcher service from the terminal for them to take effect.<br>
                         <code class="bg-yellow-400/10 text-yellow-200 px-1 py-0.5 rounded text-sm mt-1 inline-block">sudo systemctl restart guardianbridge.service</code>
                     </div>
@@ -1408,7 +1418,7 @@ an active SOS.</p>
                             <option value="REPEATER">REPEATER (Legacy Repeater)</option>
                         </select>
                     </div>
-                     <div>
+                    <div>
                         <label for="email">Email</label>
                         <input type="email" name="email" id="email">
                     </div>
@@ -1426,7 +1436,7 @@ an active SOS.</p>
                         <label for="address_street">Street Address</label>
                         <input type="text" name="address_street" id="address_street">
                     </div>
-                     <div>
+                    <div>
                         <label for="address_city">City</label>
                         <input type="text" name="address_city" id="address_city">
                     </div>
@@ -1485,10 +1495,10 @@ an active SOS.</p>
                 </div>
             </form>
         </div>
-         <div class="p-4 border-t border-slate-700/50 bg-slate-800/20 flex justify-between items-center">
-             <button type="button" id="close-user-modal-btn-footer" class="btn btn-secondary">Close</button>
+            <div class="p-4 border-t border-slate-700/50 bg-slate-800/20 flex justify-between items-center">
+                <button type="button" id="close-user-modal-btn-footer" class="btn btn-secondary">Close</button>
             <div class="flex items-center gap-4">
-                 <form id="user-modal-delete-form" method="POST">
+                <form id="user-modal-delete-form" method="POST">
                     <input type="hidden" name="action" value="delete_user">
                     <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
                     <input type="hidden" name="node_id" value="">
@@ -1779,14 +1789,17 @@ $day ?></label>
             } [tag] || tag));
         }
 
-        function getAgeStringFromTimestamp(timestamp) {
+        function formatTimestamp(timestamp) {
             if (!timestamp) return '<span class="text-slate-500">Never</span>';
-            const now = Math.floor(Date.now() / 1000);
-            const ageSeconds = now - timestamp;
-            if (ageSeconds < 60) return `${Math.round(ageSeconds)}s ago`;
-            if (ageSeconds < 3600) return `${Math.round(ageSeconds / 60)}m ago`;
-            if (ageSeconds < 86400) return `${Math.round(ageSeconds / 3600)}h ago`;
-            return `${Math.round(ageSeconds / 86400)}d ago`;
+            const months = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+            // The timestamp from PHP is in seconds, JavaScript Date needs milliseconds.
+            const date = new Date(timestamp * 1000);
+            const hours = String(date.getHours()).padStart(2, '0');
+            const minutes = String(date.getMinutes()).padStart(2, '0');
+            const day = String(date.getDate()).padStart(2, '0');
+            const month = months[date.getMonth()];
+            const year = String(date.getFullYear()).slice(-2);
+            return `${hours}:${minutes} ${day}${month}${year}`;
         }
 
         // --- MAP FUNCTIONS ---
@@ -1905,7 +1918,6 @@ $day ?></label>
             if (node.sos_role === 'SENDER') rowClass = 'bg-red-900/50 font-bold';
             if (node.sos_role === 'RESPONDER') rowClass = 'bg-green-900/50';
             if (node.sos_role === 'ACKNOWLEDGER') rowClass = 'bg-yellow-900/50 text-slate-200';
-
             let standDownForm = '';
             if (node.sos_role === 'SENDER') {
                 standDownForm = `
@@ -1917,15 +1929,13 @@ $day ?></label>
                     </form>
                 `;
             }
-
             const sosIndicator = node.sos ? `<span class="inline-block bg-red-500 text-white font-bold rounded-full px-2 py-1 text-xs mr-2">🆘 ${escapeHTML(node.sos)}</span>` : '';
             const locationButton = (node.latitude && node.longitude) ? `<button class="btn btn-secondary btn-sm location-btn" data-lat="${node.latitude}" data-lon="${node.longitude}">Map It</button>` : '';
             const position = (node.latitude && node.longitude) ? `${Number(node.latitude).toFixed(4)}, ${Number(node.longitude).toFixed(4)}` : '<span class="text-slate-600">N/A</span>';
-
             return `
                 <tr class="${rowClass}">
                     <td class="p-3 font-mono ${indentClass}">${standDownForm}${sosIndicator}<button type="button" class="text-blue-400 hover:text-blue-300 open-dm-chat" data-node-id="${escapeHTML(node.node_id)}" data-node-name="${escapeHTML(node.name || node.node_id)}">${escapeHTML(node.node_id)}</button>${node.name ? `<span class="text-slate-400 font-sans ml-2">(${escapeHTML(node.name)})</span>` : ''}</td>
-                    <td class="p-3">${getAgeStringFromTimestamp(node.lastHeard)}</td>
+                    <td class="p-3 font-mono text-sm">${formatTimestamp(node.lastHeard)}</td>
                     <td class="p-3">${escapeHTML(String(node.snr ?? ''))}</td>
                     <td class="p-3">${escapeHTML(String(node.hopsAway ?? ''))}</td>
                     <td class="p-3 font-mono text-xs p-1 rounded bg-slate-700 text-slate-300">${escapeHTML(node.role)}</td>
@@ -2090,15 +2100,117 @@ $day ?></label>
 
                 isPollingActive = false; // Stop polling before re-initializing
                 if (tab.dataset.tab === 'status') {
-                    initStatusTab();
-                    if(map) {
-                        setTimeout(() => map.invalidateSize(), 10);
-                    }
+                initStatusTab();
+                if(map) setTimeout(() => map.invalidateSize(), 10);
                 } else if (tab.dataset.tab === 'chat') {
-                    initChatTab(); // This will set isPollingActive back to true and start the chat poll
+                    initChatTab();
+                } else if (tab.dataset.tab === 'actions') {
+                    // Fetch blocklist when the actions tab is viewed
+                    fetchBlocklist();
                 }
             });
         });
+
+        // --- NEW: Blocklist Management Functions ---
+    const blocklistContainer = document.getElementById('blocklist-container');
+    const addBlocklistForm = document.getElementById('add-to-blocklist-form');
+    const newBlockedEmailInput = document.getElementById('new-blocked-email');
+
+    async function fetchBlocklist() {
+        try {
+            const response = await fetch('/map-items/api_manage_blocklist.php?action=get_blocklist');
+            if (!response.ok) {
+                renderBlocklistError('Failed to fetch blocklist from server.');
+                return;
+            }
+            const data = await response.json();
+            if (data.success) {
+                renderBlocklist(data.blocklist);
+            } else {
+                renderBlocklistError(data.message || 'An unknown error occurred.');
+            }
+        } catch (error) {
+            renderBlocklistError('Error connecting to the server.');
+            console.error('Fetch Blocklist Error:', error);
+        }
+    }
+
+    function renderBlocklist(emails) {
+        blocklistContainer.innerHTML = '';
+        if (!emails || emails.length === 0) {
+            blocklistContainer.innerHTML = '<p class="text-slate-500">The email blocklist is empty.</p>';
+            return;
+        }
+        emails.forEach(email => {
+            const emailEl = document.createElement('div');
+            emailEl.className = 'bg-black/20 p-2 rounded text-sm flex justify-between items-center';
+            emailEl.innerHTML = `
+                <span class="font-mono text-slate-300">${escapeHTML(email)}</span>
+                <button type="button" class="btn btn-red btn-sm remove-email-btn" data-email="${escapeHTML(email)}">Remove</button>
+            `;
+            blocklistContainer.appendChild(emailEl);
+        });
+    }
+
+    function renderBlocklistError(message) {
+        blocklistContainer.innerHTML = `<p class="text-red-400">${escapeHTML(message)}</p>`;
+    }
+
+    async function addBlockedEmail(email) {
+        const formData = new FormData();
+        formData.append('action', 'add_to_blocklist');
+        formData.append('email', email);
+        formData.append('csrf_token', csrfToken);
+
+        try {
+            const response = await fetch('/map-items/api_manage_blocklist.php', { method: 'POST', body: formData });
+            const data = await response.json();
+            if (!data.success) {
+                alert('Error: ' + data.message);
+            }
+            fetchBlocklist(); // Refresh the list
+        } catch (error) {
+            alert('An error occurred while adding the email.');
+            console.error('Add Email Error:', error);
+        }
+    }
+
+    async function removeBlockedEmail(email) {
+        const formData = new FormData();
+        formData.append('action', 'remove_from_blocklist');
+        formData.append('email', email);
+        formData.append('csrf_token', csrfToken);
+
+        try {
+            const response = await fetch('/map-items/api_manage_blocklist.php', { method: 'POST', body: formData });
+            const data = await response.json();
+            if (!data.success) {
+                alert('Error: ' + data.message);
+            }
+            fetchBlocklist(); // Refresh the list
+        } catch (error) {
+            alert('An error occurred while removing the email.');
+            console.error('Remove Email Error:', error);
+        }
+    }
+
+    addBlocklistForm.addEventListener('submit', function(e) {
+        e.preventDefault();
+        const emailToAdd = newBlockedEmailInput.value.trim();
+        if (emailToAdd) {
+            addBlockedEmail(emailToAdd);
+            newBlockedEmailInput.value = '';
+        }
+    });
+
+    blocklistContainer.addEventListener('click', function(e) {
+        if (e.target.classList.contains('remove-email-btn')) {
+            const emailToRemove = e.target.dataset.email;
+            if (emailToRemove && confirm(`Are you sure you want to unblock "${emailToRemove}"?`)) {
+                removeBlockedEmail(emailToRemove);
+            }
+        }
+    });
 
         initStatusTab();
 
@@ -2230,8 +2342,8 @@ $day ?></label>
                 const text = (msg.text || '').trim();
                 let isServerMessage = false;
                 for (const prefix of serverMessagePrefixes) { if (text.replace(/^\x07/, '').startsWith(prefix)) { isServerMessage = true; break; } }
-                if (isServerMessage) return showSMs;
-                // A DM is either flagged as such from the backend, or is an outgoing message from the gateway starting with @
+                if (isServerMessage) return showSMs; // Filter for server messages
+                // A DM is either flagged with `is_dm` (incoming) or is an outgoing message from the gateway starting with @
                 let isConsideredDM = msg.is_dm || (msg.from === 'GATEWAY' && text.replace(/^\x07/, '').startsWith('@'));
                 if (isConsideredDM) return showDMs;
                 return true;
@@ -2240,7 +2352,7 @@ $day ?></label>
             if (filteredMessages.length > 0) {
                 filteredMessages.forEach(msg => { chatContainerElement.innerHTML += createMessageHTML(msg, lastFetchedSubscribers, false); });
             } else {
-               chatContainerElement.innerHTML = `<div class="text-center text-slate-500 py-16"><p>No messages to display with current filters.</p></div>`;
+                chatContainerElement.innerHTML = `<div class="text-center text-slate-500 py-16"><p>No messages to display with current filters.</p></div>`;
             }
             if (isScrolledToBottom) { chatWindow.scrollTop = chatWindow.scrollHeight; }
         }
@@ -2253,8 +2365,9 @@ $day ?></label>
             const filteredMessages = lastFetchedMessages.filter(msg => {
                 const gatewayToUserRegex = new RegExp(`^@${escapeRegExp(targetName)}\\s`, 'i');
                 const fromGatewayToUser = msg.from === 'GATEWAY' && gatewayToUserRegex.test((msg.text || '').replace(/^\x07/, ''));
-                const fromUserToGateway = msg.from === targetNodeId && msg.toId === 'GATEWAY';
-                return fromUserToGateway || fromGatewayToUser;
+                // A DM from a user to the gateway is identified by the sender's ID and the `is_dm` flag.
+                const fromUserToGateway = msg.from === targetNodeId && msg.is_dm;
+                return fromUserToGateway || fromGatewayToUser; // Show messages from the user to the gateway, or from the gateway to the user.
             });
             const isScrolledToBottom = dmChatWindow.scrollHeight - dmChatWindow.clientHeight <= dmChatWindow.scrollTop + 10;
             dmChatContainer.innerHTML = '';

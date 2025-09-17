@@ -43,12 +43,11 @@ def sanitize_filename(name):
 
 @contextmanager
 def file_lock(lock_file_path):
-    """A context manager for file-based locking."""
     if os.path.exists(lock_file_path):
         logging.warning(f"Lock file {lock_file_path} already exists. Waiting...")
     
     retry_count = 0
-    while retry_count < 10: # Wait for a maximum of 1 second
+    while retry_count < 10:
         try:
             fd = os.open(lock_file_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             os.close(fd)
@@ -74,23 +73,14 @@ def load_json(path):
         return None
 
 def clean_forwarded_body(body):
-    """Cleans forwarded/replied-to text from an email body using a master separator pattern."""
-    original_len = len(body)
     master_separator_pattern = re.compile(
         r"sent the following message:|-----Original Message-----|^\s*>?\s*On .* wrote:\s*$",
         re.IGNORECASE | re.MULTILINE
     )
     parts = master_separator_pattern.split(body, maxsplit=1)
-    cleaned_body = parts[0].strip()
-    if len(cleaned_body) < original_len:
-        logging.info(f"Cleaned forwarded content from email body. Original length: {original_len}, New length: {len(cleaned_body)}")
-    return cleaned_body
+    return parts[0].strip()
 
 def find_and_authorize_broadcast_sender(sender_email, subscribers):
-    """
-    Checks if the sender is authorized to send broadcasts.
-    Returns the sender's name if authorized, otherwise None.
-    """
     for node_id, data in subscribers.items():
         if data.get('email', '').lower() == sender_email.lower():
             if data.get('emailbroadcast', False):
@@ -98,7 +88,6 @@ def find_and_authorize_broadcast_sender(sender_email, subscribers):
     return None
 
 def send_feedback_email(recipient, subject, body):
-    """Sends a feedback email (e.g., success or rejection notice)."""
     try:
         with smtplib.SMTP(settings.IMAP_SERVER, 587) as smtp:
             smtp.starttls()
@@ -125,13 +114,26 @@ def find_recipients_in_subject(subject, subscribers):
 def process_incoming_emails():
     os.makedirs(settings.COMMANDS_DIR, exist_ok=True)
     subscribers = load_json(settings.SUBSCRIBERS_FILE) or {}
+    
+    # --- NEW: Load the email blocklist ---
+    email_blocklist = load_json(settings.EMAIL_BLOCKLIST_FILE) or []
+    email_blocklist = {email.lower() for email in email_blocklist} # Convert to a set for faster lookups
+    
     processed_uids = []
     try:
         with MailBox(settings.IMAP_SERVER, port=settings.IMAP_PORT).login(settings.EMAIL_USER, settings.EMAIL_PASS, initial_folder="INBOX") as mailbox:
             for msg in mailbox.fetch(AND(seen=False)):
                 try:
-                    logging.info(f"Processing email from {msg.from_}: {msg.subject}")
                     sender_email = msg.from_
+                    
+                    # --- NEW: Check if the sender is on the blocklist ---
+                    if sender_email.lower() in email_blocklist:
+                        logging.warning(f"Ignoring email from blocked sender: {sender_email}")
+                        processed_uids.append(msg.uid)
+                        continue # Skip to the next message
+                        
+                    logging.info(f"Processing email from {sender_email}: {msg.subject}")
+                    
                     subject_raw = msg.subject.strip()
                     subject_lower = subject_raw.lower()
                     raw_body = msg.text or BeautifulSoup(msg.html, 'html.parser').get_text(separator='\n').strip()
@@ -149,7 +151,6 @@ def process_incoming_emails():
                             MAX_PAYLOAD_SIZE = 199
                             DOWNSTREAM_PREFIX_BYTES = 5
                             BELL_CHAR_BYTES = 1 if is_alert else 0
-                            
                             effective_max_size = MAX_PAYLOAD_SIZE - DOWNSTREAM_PREFIX_BYTES - BELL_CHAR_BYTES
                             
                             prefix = f"FM {sender_name}:\n"
@@ -288,7 +289,7 @@ def process_incoming_emails():
                     
                     processed_uids.append(msg.uid)
                 except Exception as e:
-                    logging.error(f"Failed to process email UID {msg.uid}. Subject: '{subject_raw}'. Error: {e}", exc_info=True)
+                    logging.error(f"Failed to process email UID {msg.uid}. Subject: '{msg.subject}'. Error: {e}", exc_info=True)
             if processed_uids and settings.TRASH_FOLDER_NAME:
                 mailbox.move(processed_uids, settings.TRASH_FOLDER_NAME)
     except Exception as e:
@@ -318,7 +319,6 @@ def send_pending_outgoing_emails():
                     sender_name = sender_info.get("name", sender_node_id)
                     full_body = ""
                     
-                    # If the message is an SOS alert, use only the original body and the custom instructions.
                     if msg_data.get("is_sos", False):
                         instructions_body = ""
                         if os.path.exists(settings.SOS_EMAIL_INSTRUCTIONS_FILE):
@@ -329,7 +329,6 @@ def send_pending_outgoing_emails():
                                 logging.error(f"Could not read SOS instructions file: {e}")
                         full_body = f"{original_body}\n\n{instructions_body}"
                     else:
-                        # For regular messages, construct the header and footer.
                         try:
                             tz = pytz.timezone(get_localzone_name())
                             now = datetime.now(tz)

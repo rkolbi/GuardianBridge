@@ -263,10 +263,10 @@ For maximum reliability, the entire GuardianBridge network should be physically 
 The Admin Panel (`map.php`) is a comprehensive, web-based UI for managing and monitoring the system.
 
 * **Status Tab**: Your main dashboard for monitoring gateway health, service status, radio connection, and cron job status. It features a live map and node list that automatically refreshes every 5 seconds by fetching data from `api_get_nodes.php`. Nodes with an active SOS are highlighted with a distinct red icon on the map and in the node list.
-* **Chat Tab**: Provides a real-time interface for monitoring and participating in mesh conversations, polling `api_get_chat.php` for updates. It includes filters to selectively show or hide Direct Messages and system-generated server messages. Admins can click on any user's Node ID to open a dedicated DM chat window, allowing for private, real-time conversations.
-* **Actions Tab**: Allows manual tasks like forcing an immediate weather fetch, processing emails, or clearing the outgoing email queue. The "SOS Alert Log" displays a full history of all received alerts, and administrators can remotely clear an active SOS using the "Admin Clear SOS" button.
+* **Chat Tab**: Provides a real-time interface for monitoring and participating in mesh conversations, polling `api_get_chat.php` for updates. It includes filters to selectively show or hide Direct Messages and system-generated server messages. Admins can click on any user's Node ID to open a dedicated DM chat window, allowing for private, real-time conversations. During an active SOS, the Live Node List transforms into an **Incident Command Dashboard**, grouping responders under the incident they've committed to and color-coding them by role.
+* **Actions Tab**: Allows manual tasks like forcing an immediate weather fetch, processing emails, or clearing the outgoing email queue. It features an "SOS Alert Log" which displays a full history of all received alerts. Administrators can also remotely clear a user's active SOS alert using the "Admin Clear SOS" button, which sends a "STAND DOWN" message to all relevant responders. A new section allows for managing a **Blocked Email Senders** list to prevent spam.
 * **Broadcasts Tab**: A powerful interface for managing custom, automated messages, including recurring jobs (e.g., daily announcements) and one-time, date-based events.
-* **Users Tab**: Provides full control over subscribers, including editing names, full names, phone numbers, email, addresses, and notes. You can toggle individual subscriptions (alerts, weather, forecast) and manage advanced permissions (email send/receive/broadcast, node tag send). You can also manage assigned tags and set a "blocked" status to ignore all commands from a specific user. The tab displays both the assigned role and the live reported role from the node's radio, highlighting any discrepancies.
+* **Users Tab**: Provides full control over subscribers, including editing names, full names, phone numbers, email, addresses, and notes. It includes fields for **Emergency Point of Contact** and a custom **SOS Notify List** (email, node ID, or username). You can toggle individual subscriptions (alerts, weather, forecast) and manage advanced permissions (email send/receive/broadcast, node tag send). You can also manage assigned tags and set a "blocked" status to ignore all commands from a specific user. The tab displays both the assigned role and the live reported role from the node's radio, highlighting any discrepancies.
 * **Settings Tab**: Allows for easy editing of the system's core `.env` configuration file for things like GPS coordinates, email credentials, and broadcast intervals. **A dispatcher restart is required for these changes to take effect**.
 * **Help/About Tab**: Contains system documentation and version information.
 
@@ -295,10 +295,12 @@ Interact with the GuardianBridge gateway by sending it Direct Messages from your
 | `address/your address`| Sets your physical address. Ex: `address/123 Main St, Anytown`. |
 | `email/to/subj/body` | Sends an email. Ex: `email/to@addr.com/subject/body`. |
 | `tagsend/tags/msg`| Sends a message to a tag group. Ex: `tagsend/CERT/Meeting at 5`. *Requires admin-granted permission.* |
-| `SOS`, `SOSP`, `SOSF`, `SOSM` | Triggers an emergency alert (General, Police, Fire, Medical). Can include a message. |
+| `SOS`, `SOSP`, `SOSF`, `SOSM` | Triggers an emergency alert (General, Police, Fire, Medical). Can include a brief message. Ex: `SOSM Need medical assistance for injured dog`. You will receive a confirmation and updates as responders join. |
 | `CLEAR`, `CANCEL`, `SAFE` | Clears your active emergency alert. |
-| `ACK` or `RESPONDING` | Acknowledge or respond to an active SOS alert. |
-| `active` or `alertstatus` | Get a list of all currently active SOS alerts. |
+| `ACK` or `RESPONDING` | Acknowledge or respond to an active SOS alert. If multiple incidents are active, the gateway will prompt you to specify which one (e.g., `ACK 1`). |
+| `active` or `alertstatus` | Gets a list of all currently active SOS alerts. |
+| `block/email@addr.com` | *Admin only.* Adds an email address to the blocklist, ignoring all future emails from it. |
+| `unblock/email@addr.com`| *Admin only.* Removes an email address from the blocklist. |
 
 ### 5.3. Authorized User Guide (Using Email Features)
 
@@ -370,7 +372,9 @@ All files are located within the `/opt/GuardianBridge/` directory.
 ├── dispatcher\_state.json\# Stores last-sent times for broadcasts
 ├── dispatcher\_status.json\# Health status for the web panel
 ├── channel0\_log.json    \# Log of all chat messages for the web panel
-├── sos\_log.json         \# New file for SOS logging
+├── node_status.json     \# Stores active status for nodes (e.g., SOS state)
+├── sos\_log.json         \# Log of all SOS events
+├── sos\_email\_instructions.txt \# Custom text appended to SOS notification emails
 ├── \*.lastrun            \# Files indicating cron jobs ran
 └── commands/            \# Folder for command files (message bus)
 
@@ -503,7 +507,7 @@ sudo cp /path/to/your/map.php /var/www/html/index.php
 # Set crucial file permissions for the web server (CRITICAL STEP)
 sudo usermod -a -G www-data pi
 sudo chown -R pi:www-data /opt/GuardianBridge
-sudo chmod -R 775 /opt/GuardianBridge
+sudo chmod -R g+w /opt/GuardianBridge
 # A system reboot is required for the group change to take effect.
 ```
 

@@ -76,7 +76,7 @@ In an emergency, the scariest moment is wondering if your call for help even got
     Now you know for sure that help is on the way.
 * **Multi-Responder Updates:** Emergencies often require more than one responder. As each team member sends `RESPONDING`, you see a running list of names:
     * *First responder:* `🤖 Help is on the way. Alice is responding to your alert.`
-    * *Second responder:* `🤖 Help is on ahe way. Alice and Bob are now responding to your alert.`
+    * *Second responder:* `🤖 Help is on the way. Alice and Bob are now responding to your alert.`
 * **SOS with Context:** A message is good. A message with context saves lives. Add a short note to your SOS—for example:
     ```
     SOSM Need medical assistance for injured dog
@@ -291,7 +291,7 @@ Interact with the GuardianBridge gateway by sending it Direct Messages from your
 
 | Command | Description |
 | :--- | :--- |
-| `?` | Shows a list of available commands. |
+| `help` or `?` | Shows a list of available commands. |
 | `subscribe` | Subscribes you to all automated broadcasts. |
 | `unsubscribe` | Unsubscribes you from all broadcasts. |
 | `status` | Shows your current name, subscription settings, and assigned tags. |
@@ -369,6 +369,7 @@ All files are located within the `/opt/GuardianBridge/` directory.
     ├── dispatcher_jobs.json # Schedule for custom broadcasts, managed by the web panel
     ├── dispatcher_state.json# Stores last-sent times for scheduled broadcasts
     ├── dispatcher_status.json# Health status for the web panel
+    ├── node_status.json     # Stores active status for nodes (e.g., SOS state)
     ├── channel0_log.json    # Log of all chat messages for the web panel
     ├── sos_log.json         # New file for SOS logging
     ├── *.lastrun            # Files indicating cron jobs ran
