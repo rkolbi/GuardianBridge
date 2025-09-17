@@ -309,6 +309,7 @@ def update_node_statuses(now=None):
         
         existing_node_data = node_statuses.get(node_id, {})
         current_sos_status = existing_node_data.get('sos')
+        current_active_tag = existing_node_data.get('active_tag_channel')
         last_known_lat = existing_node_data.get('latitude')
         last_known_lon = existing_node_data.get('longitude')
 
@@ -332,6 +333,8 @@ def update_node_statuses(now=None):
         }
         if current_sos_status:
             node_statuses[node_id]['sos'] = current_sos_status
+        if current_active_tag:
+            node_statuses[node_id]['active_tag_channel'] = current_active_tag
 
     if gateway_node_id and gateway_node_id in iface.nodes:
         my_node = iface.nodes[gateway_node_id]
@@ -713,7 +716,7 @@ def _cmd_tagsend(sender, args):
                 recipient_ids.add(node_id)
     if not recipient_ids:
         return f"No users found with tags: {', '.join(target_tags)}"
-    formatted_message = f"[Tags: {', '.join(target_tags)}] From {sender_name}:\n{message}"
+    formatted_message = f"[{', '.join(target_tags)}] {sender_name}\n{message}"
     for recipient_id in recipient_ids:
         send_meshtastic_message(formatted_message, destinationId=recipient_id)
     return None
@@ -786,6 +789,41 @@ def _cmd_unblock_email(sender, args):
         else:
             return f"{email_to_unblock} was not on the blocklist."
 
+# --- NEW: tagin/tagout commands ---
+def _cmd_tagin(sender, args):
+    tag_to_join = args.strip().upper()
+    if not tag_to_join:
+        return "Usage: tagin/TAGNAME"
+
+    # Optional: Check if user has the tag they are trying to join
+    with subscribers_lock:
+        user_tags = subscribers.get(sender, {}).get('tags', [])
+        if tag_to_join not in user_tags:
+            return f"You do not have the '{tag_to_join}' tag. Cannot join channel."
+
+    with file_lock(settings.NODE_STATUS_FILE + ".lock"):
+        node_statuses = load_json(settings.NODE_STATUS_FILE) or {}
+        if sender not in node_statuses:
+            node_statuses[sender] = {}
+        node_statuses[sender]['active_tag_channel'] = tag_to_join
+        save_json(settings.NODE_STATUS_FILE, node_statuses)
+    
+    return f"You are now transmitting to {tag_to_join} tagged users. Send 'tagout' to exit."
+
+def _cmd_tagout(sender, args):
+    with file_lock(settings.NODE_STATUS_FILE + ".lock"):
+        node_statuses = load_json(settings.NODE_STATUS_FILE) or {}
+        if node_statuses.get(sender, {}).get('active_tag_channel'):
+            # Using .pop() safely removes the key
+            node_statuses[sender].pop('active_tag_channel', None)
+            # If the user's status object is now empty, we can remove it
+            if not node_statuses[sender]:
+                del node_statuses[sender]
+            save_json(settings.NODE_STATUS_FILE, node_statuses)
+            return "You have exited the tag."
+        else:
+            return "You are not in a tag."
+
 COMMAND_HANDLERS = {
     "subscribe": _cmd_subscribe, "unsubscribe": _cmd_unsubscribe,
     "name": _cmd_set_name,
@@ -801,6 +839,8 @@ COMMAND_HANDLERS = {
     "alertstatus": _cmd_sos_status,
     "block": _cmd_block_email,
     "unblock": _cmd_unblock_email,
+    "tagin": _cmd_tagin,
+    "tagout": _cmd_tagout,
 }
 
 def handle_meshtastic_command(sender, command_text):
@@ -864,6 +904,62 @@ def on_meshtastic_message(packet, interface):
     if text.startswith(BOT_MESSAGE_PREFIXES):
         return
 
+    command_queue.put((sender, text))
+
+def on_meshtastic_message(packet, interface):
+    global gateway_node_id, node_last_heard_cache, node_last_heard_cache_lock
+    decoded = packet.get("decoded", {})
+    if decoded.get("portnum") != "TEXT_MESSAGE_APP":
+        return
+
+    text = decoded.get("text", "").strip()
+    sender = packet.get("fromId")
+    destination_id = packet.get("toId")
+
+    if not text or not sender:
+        return
+
+    if sender:
+        with node_last_heard_cache_lock:
+            node_last_heard_cache[sender] = time.time()
+        retry_queued_messages_for_node(sender)
+
+    is_dm_to_gateway = (destination_id == gateway_node_id)    
+    log_channel_message(sender, text, is_dm=is_dm_to_gateway)
+
+    if not is_dm_to_gateway:
+        return
+    
+    with subscribers_lock:
+        if subscribers.get(sender, {}).get('blocked', False):
+            logging.info(f"Ignoring command from blocked user: {sender}")
+            return
+
+    if text.startswith(BOT_MESSAGE_PREFIXES):
+        return
+
+    # --- NEW: tagin/tagout stateful logic ---
+    node_statuses = load_json(settings.NODE_STATUS_FILE) or {}
+    active_tag_channel = node_statuses.get(sender, {}).get('active_tag_channel')
+    
+    command_word, _ = parse_command_text(text)
+    
+    # Always allow tagin/tagout commands to be processed
+    if command_word in ["tagin", "tagout"]:
+        command_queue.put((sender, text))
+        return
+
+    if active_tag_channel:
+        # User is in a tag channel. Check if the message is a standard command.
+        # If it's NOT a standard command, treat it as a message for the tag channel.
+        if command_word not in COMMAND_HANDLERS and command_word.upper() not in SOS_COMMANDS and command_word.upper() not in CLEAR_COMMANDS and command_word.upper() not in ACK_COMMANDS.union(RESPONDING_COMMANDS):
+            logging.info(f"User {sender} is in tag channel '{active_tag_channel}'. Rerouting message.")
+            # Re-route the message by creating a tagsend command and putting it on the queue
+            tagsend_command_text = f"tagsend/{active_tag_channel}/{text}"
+            command_queue.put((sender, tagsend_command_text))
+            return # Stop further processing of the original message
+
+    # If not in a tag channel, or if it was a standard command, process normally.
     command_queue.put((sender, text))
 
 def _queue_sos_email_notification(sos_code, subject, body, extra_recipients=None):
