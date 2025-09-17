@@ -29,7 +29,7 @@ ZOOM_LEVELS = range(10, 17)
 # The web directory where the map tiles will be served from.
 # This path should be relative to your web server's root.
 WEB_DIRECTORY_PATH = "/var/www" # Standard for Apache on Debian/Ubuntu
-TILE_STORAGE_DIR = os.path.join(WEB_DIRECTORY_PATH, "map-tiles")
+TILE_STORAGE_DIR = os.path.join(WEB_DIRECTORY_PATH, "map-items", "map-tiles")
 
 # --- OpenStreetMap Tile Server URL ---
 # {s} is the subdomain (a,b,c), {z} is zoom, {x} is x-tile, {y} is y-tile

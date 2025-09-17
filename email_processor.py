@@ -318,8 +318,12 @@ def send_pending_outgoing_emails():
                     sender_info = subscribers.get(sender_node_id, {})
                     sender_name = sender_info.get("name", sender_node_id)
                     full_body = ""
+                    from_name = f"{sender_name} ({sender_node_id}) via GuardianBridge"
                     
                     if msg_data.get("is_sos", False):
+                        # For SOS messages, the sender is the system itself.
+                        from_name = "GuardianBridge Alert System"
+
                         instructions_body = ""
                         if os.path.exists(settings.SOS_EMAIL_INSTRUCTIONS_FILE):
                             try:
@@ -327,7 +331,13 @@ def send_pending_outgoing_emails():
                                     instructions_body = f.read()
                             except Exception as e:
                                 logging.error(f"Could not read SOS instructions file: {e}")
-                        full_body = f"{original_body}\n\n{instructions_body}"
+                        
+                        # Construct the SOS email body: original message + instructions.
+                        # No extra headers or footers.
+                        if instructions_body:
+                            full_body = f"{original_body}\n\n---\n\n{instructions_body}"
+                        else:
+                            full_body = original_body
                     else:
                         try:
                             tz = pytz.timezone(get_localzone_name())
@@ -355,7 +365,7 @@ def send_pending_outgoing_emails():
 
                     email_msg = MIMEText(full_body)
                     email_msg["Subject"] = subject
-                    email_msg["From"] = f"{sender_name} ({sender_node_id}) via GuardianBridge <{settings.EMAIL_USER}>"
+                    email_msg["From"] = f"{from_name} <{settings.EMAIL_USER}>"
                     email_msg["To"] = recipient
                     smtp.send_message(email_msg)
                     logging.info(f"Sent email from {sender_name} to {recipient}")

@@ -1022,10 +1022,16 @@ strtotime($dm['timestamp']))) ?></span><br>
                     </div>
                     <div class="card p-6 md:col-span-2">
                         <div class="flex justify-between items-center mb-4">
-                            <h2 class="text-2xl font-bold text-red-400">SOS Alerts</h2>
-                            <a href="api_download_sos_log.php" class="btn btn-secondary" download>
-                                SOS Log Download
-                            </a>
+                            <h2 class="text-2xl font-bold text-red-400">SOS Incident Command</h2>
+                             <div class="flex items-center gap-4">
+                                <form method="POST" id="admin-clear-sos-form" class="inline-block">
+                                    <input type="hidden" name="action" value="admin_clear_sos">
+                                    <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
+                                    <input type="hidden" name="node_id" value="">
+                                    <button type="submit" class="btn btn-secondary" disabled title="No active SOS detected.">Admin Clear Active SOS</button>
+                                </form>
+                                <a href="/map-items/api_download_sos_log.php" class="btn btn-secondary" download>SOS Log Download</a>
+                            </div>
                         </div>
                         <p class="text-slate-400 mb-4 text-sm">This is a live, filtered list of nodes actively sending or responding to an SOS event.</p>
                         <div class="overflow-x-auto">
