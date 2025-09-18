@@ -318,7 +318,7 @@ function save_env_settings($file_path, $new_settings, $whitelist) {
     return true;
 }
 function get_file_age_string($file_path) {
-    if (!file_exists($file_path)) return '<span class="text-slate-500">Never</span>';
+    if (!file_exists($file_path)) return '<span class="text-slate-500">Unkown</span>';
     $age_seconds = time() - filemtime($file_path);
     if ($age_seconds < 60) return $age_seconds . ' seconds ago';
     if ($age_seconds < 3600) return round($age_seconds / 60) . ' minutes ago';
@@ -1796,7 +1796,7 @@ $day ?></label>
         }
 
         function formatTimestamp(timestamp) {
-            if (!timestamp) return '<span class="text-slate-500">Never</span>';
+            if (!timestamp) return '<span class="text-slate-500">Unkown</span>';
             const months = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
             // The timestamp from PHP is in seconds, JavaScript Date needs milliseconds.
             const date = new Date(timestamp * 1000);
