@@ -1,0 +1,59 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+
+# Local environment / secrets
+.env
+.env.*
+!.env.example
+
+# Runtime data and generated state (non-public)
+data/
+AutoBackUp/
+mock/
+releases/
+private/
+exports/
+downloads/
+
+# SQLite runtime files
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Local credentials / key material (private)
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.csr
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+
+# Local exports and reports that may contain PII
+guardianbridge_audit_log*.json
+guardianbridge_audit_log*.csv
+guardianbridge_email_quarantine*.json
+guardianbridge_*_export*.json
+guardianbridge_*_export*.csv
+
+# Logs and temp files
+*.log
+*.tmp
+*.temp
+*.bak
+*.pid
+
+# OS/editor metadata
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

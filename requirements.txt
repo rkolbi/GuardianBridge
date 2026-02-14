@@ -1,0 +1,10 @@
+beautifulsoup4==4.12.3
+imap-tools==1.11.0
+meshtastic==2.6.3
+pypubsub==4.0.3
+python-dateutil==2.9.0.post0
+python-dotenv==1.0.1
+pytz==2024.1
+requests==2.32.3
+tzlocal==5.2
+watchdog==4.0.1
