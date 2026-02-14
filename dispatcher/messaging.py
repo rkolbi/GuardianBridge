@@ -10,19 +10,39 @@ from . import core
 
 
 def send_meshtastic_message(text: str, **kwargs: Any) -> None:
+    priority = bool(kwargs.pop("priority", False))
+    warn_queue_wait = bool(kwargs.pop("warn_queue_wait", True))
     kwargs["text"] = text
-    core.send_queue.put(kwargs)
+    kwargs["_queued_at"] = time.time()
+    kwargs["_warn_queue_wait"] = warn_queue_wait
+    if priority:
+        core.send_priority_queue.put(kwargs)
+    else:
+        core.send_queue.put(kwargs)
 
 
 def sender_thread_worker() -> None:
     logging.info("Sender thread started.")
     while True:
         try:
-            kwargs = core.send_queue.get()
+            kwargs = core.dequeue_send_job()
             if kwargs is None:
-                break
+                if core.send_priority_queue.empty() and core.send_queue.empty():
+                    break
+                continue
 
-            start_time = time.time()
+            queued_at = kwargs.pop("_queued_at", None)
+            warn_queue_wait = bool(kwargs.pop("_warn_queue_wait", True))
+            if isinstance(queued_at, (int, float)):
+                queue_wait_ms = max(0.0, (time.time() - float(queued_at)) * 1000.0)
+                core.record_latency_sample("send_queue_wait_ms", queue_wait_ms)
+                if warn_queue_wait and queue_wait_ms >= core.SEND_QUEUE_WAIT_WARN_MS:
+                    destination_preview = kwargs.get("destinationId")
+                    logging.warning(
+                        f"Send queue wait high ({queue_wait_ms:.1f}ms) for destination {destination_preview or 'Broadcast'}."
+                    )
+
+            start_monotonic = time.perf_counter()
 
             text = kwargs.get("text")
             destination_id = kwargs.get("destinationId")
@@ -50,21 +70,39 @@ def sender_thread_worker() -> None:
                 except Exception as e:
                     logging.error(f"Unexpected error sending message to {destination_id}: {e}", exc_info=True)
 
-            elapsed = time.time() - start_time
-            if elapsed < core.MIN_SEND_INTERVAL_SECONDS:
-                time.sleep(core.MIN_SEND_INTERVAL_SECONDS - elapsed)
+            elapsed_send = time.perf_counter() - start_monotonic
+            send_exec_ms = max(0.0, elapsed_send * 1000.0)
+            core.record_latency_sample("send_exec_ms", send_exec_ms)
+            if send_exec_ms >= core.SEND_EXEC_WARN_MS:
+                logging.warning(
+                    f"Send execution slow ({send_exec_ms:.1f}ms) for destination {destination_id or 'Broadcast'}."
+                )
+            if elapsed_send < core.MIN_SEND_INTERVAL_SECONDS:
+                time.sleep(core.MIN_SEND_INTERVAL_SECONDS - elapsed_send)
 
         except Exception as e:
             logging.error(f"Error in sender thread: {e}", exc_info=True)
             core.record_runtime_error("sender_thread_worker", str(e))
 
 
-def broadcast_to_subscribers(message: str, subscription_key: str) -> None:
+def broadcast_to_subscribers(
+    message: str,
+    subscription_key: str,
+    *,
+    priority: bool = False,
+    warn_queue_wait: bool = True,
+) -> None:
     with core.subscribers_lock:
         current_subscribers = list(core.subscribers.items())
     for sender_id, sub_data in current_subscribers:
         if sub_data.get(subscription_key, False) and not sub_data.get("blocked", False):
-            send_meshtastic_message(message, destinationId=sender_id, wantAck=True)
+            send_meshtastic_message(
+                message,
+                destinationId=sender_id,
+                wantAck=True,
+                priority=priority,
+                warn_queue_wait=warn_queue_wait,
+            )
 
 
 def retry_queued_messages_for_node(node_id: str) -> None:
@@ -76,7 +114,6 @@ def retry_queued_messages_for_node(node_id: str) -> None:
         gb_db.delete_failed_dm([msg["id"] for msg in messages_for_node if "id" in msg])
     for msg in messages_for_node:
         send_meshtastic_message(text=msg["text"], destinationId=msg["destination_id"], wantAck=True)
-        time.sleep(core.MIN_SEND_INTERVAL_SECONDS)
 
 
 def on_meshtastic_message(packet: Dict[str, Any], interface: Any) -> None:
@@ -110,15 +147,15 @@ def on_meshtastic_message(packet: Dict[str, Any], interface: Any) -> None:
     if text.startswith(core.BOT_MESSAGE_PREFIXES):
         return
 
-    node_statuses = gb_db.load_node_statuses_dict() or {}
-    active_tag_channel = node_statuses.get(sender, {}).get("active_tag_channel")
+    sender_status = gb_db.get_node_status(sender) or {}
+    active_tag_channel = sender_status.get("active_tag_channel")
 
     from .commands import COMMAND_HANDLERS, parse_command_text
 
     command_word, _ = parse_command_text(text)
 
     if command_word in ["tagin", "tagout"]:
-        core.command_queue.put((sender, text))
+        core.enqueue_command(sender, text)
         return
 
     if active_tag_channel:
@@ -130,7 +167,7 @@ def on_meshtastic_message(packet: Dict[str, Any], interface: Any) -> None:
         ):
             logging.info(f"User {sender} is in tag channel '{active_tag_channel}'. Rerouting message.")
             tagsend_command_text = f"tagsend/{active_tag_channel}/{text}"
-            core.command_queue.put((sender, tagsend_command_text))
+            core.enqueue_command(sender, tagsend_command_text)
             return
 
-    core.command_queue.put((sender, text))
+    core.enqueue_command(sender, text)

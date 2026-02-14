@@ -113,7 +113,6 @@ class EmailProcessorTests(unittest.TestCase):
         settings = self.email_processor.settings
 
         settings.DATA_DIR = self.temp_dir.name
-        settings.COMMANDS_DIR = os.path.join(self.temp_dir.name, "commands")
         settings.OUTGOING_EMAIL_FILE = os.path.join(self.temp_dir.name, "outgoing_emails.json")
         settings.EMAIL_RATE_LIMIT_FILE = os.path.join(self.temp_dir.name, "email_rate_limit.json")
         settings.EMAIL_BLOCKLIST_FILE = os.path.join(self.temp_dir.name, "email_blocklist.json")
@@ -124,7 +123,6 @@ class EmailProcessorTests(unittest.TestCase):
         settings.EMAIL_RATE_LIMIT_WINDOW_SECONDS = 0
         settings.MAX_EMAIL_BODY_LEN = 500
 
-        os.makedirs(settings.COMMANDS_DIR, exist_ok=True)
         self.email_processor.gb_db._initialized = False
         self.email_processor.gb_db.ensure_db()
         self.email_processor.gb_db.load_subscribers_dict = lambda: {}
@@ -282,6 +280,54 @@ class EmailProcessorTests(unittest.TestCase):
 
         cleared = self.email_processor.gb_db.fetch_outgoing_emails()
         self.assertEqual(cleared, [])
+
+    def test_send_pending_outgoing_emails_deletes_already_sent_rows_on_partial_failure(self):
+        class DummySMTP:
+            def __init__(self, *args, **kwargs):
+                self.calls = 0
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def starttls(self):
+                return None
+
+            def login(self, user, password):
+                return None
+
+            def send_message(self, msg):
+                self.calls += 1
+                if self.calls >= 2:
+                    raise RuntimeError("smtp send failed")
+
+        self.email_processor.smtplib.SMTP = DummySMTP
+        self.email_processor.gb_db.load_subscribers_dict = lambda: {}
+
+        self.email_processor.gb_db.add_outgoing_email(
+            {
+                "recipient": "one@example.com",
+                "subject": "First",
+                "body": "Message one",
+                "sender_node": "!node1",
+            }
+        )
+        self.email_processor.gb_db.add_outgoing_email(
+            {
+                "recipient": "two@example.com",
+                "subject": "Second",
+                "body": "Message two",
+                "sender_node": "!node2",
+            }
+        )
+
+        self.email_processor.send_pending_outgoing_emails()
+
+        remaining = self.email_processor.gb_db.fetch_outgoing_emails()
+        self.assertEqual(len(remaining), 1)
+        self.assertEqual(remaining[0].get("subject"), "Second")
 
 
 if __name__ == "__main__":

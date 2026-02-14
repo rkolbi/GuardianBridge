@@ -205,18 +205,13 @@ $audit_actor = trim((string)($admin_username ?: 'admin'));
 
 // --- CONFIGURATION & FILE PATHS ---
 $data_dir = $base_dir . '/data';
-$node_db_status_file = $data_dir . '/node_status.json';
 $subscribers_file = $data_dir . '/subscribers.json';
 $dispatcher_file = $data_dir . '/dispatcher_jobs.json';
 $weather_current_file = $data_dir . '/weather_current.json';
 $weather_alerts_file = $data_dir . '/nws_alerts.json';
-$outgoing_email_file = $data_dir . '/outgoing_emails.json';
-$failed_dm_queue_file = $data_dir . '/failed_dm_queue.json';
 $dispatcher_status_file = $data_dir . '/dispatcher_status.json';
 $weather_fetcher_lastrun_file = $data_dir . '/weather_fetcher.lastrun';
 $email_processor_lastrun_file = $data_dir . '/email_processor.lastrun';
-$commands_dir = $base_dir . '/data/commands';
-$sos_log_file = $data_dir . '/sos_log.json';
 $sos_email_instructions_file = $data_dir . '/sos_email_instructions.txt';
 
 $manageable_settings = [
@@ -234,7 +229,7 @@ $manageable_settings = [
     'SOS_ACK_TIMEOUT_MINS', 'SOS_CHECKIN_INTERVAL_MINS', 'SOS_CHECKIN_MAX_ATTEMPTS', 'TEMP_GROUP_TTL_DAYS',
     'AUTO_BACKUP_INTERVAL_HOURS',
     // Rate limiting
-    'COMMAND_BURST_LIMIT', 'COMMAND_BURST_WINDOW_SECONDS',
+    'COMMAND_BURST_LIMIT', 'COMMAND_BURST_WINDOW_SECONDS', 'COMMAND_COOLDOWN_SECONDS', 'MIN_SEND_INTERVAL_SECONDS',
     'EMAIL_RATE_LIMIT_MAX', 'EMAIL_RATE_LIMIT_WINDOW_SECONDS',
     'OUTGOING_EMAIL_QUARANTINE_MAX',
     // Audit retention controls
@@ -306,17 +301,6 @@ function format_age_string($age_seconds) {
     return round($age_seconds / 3600) . ' hours ago';
 }
 
-function legacy_json_count($file_path) {
-    $data = get_locked_json_file($file_path, null);
-    if ($data === null) {
-        return null;
-    }
-    if (is_array($data) || is_countable($data)) {
-        return count($data);
-    }
-    return null;
-}
-
 function write_json_atomic($file_path, $data) {
     $dir = dirname($file_path);
     if (!is_dir($dir)) {
@@ -338,7 +322,7 @@ function write_json_atomic($file_path, $data) {
     return true;
 }
 
-function gb_queue_dispatcher_command($commands_dir, array $command_data, &$queued_filename = '', &$command_id = '') {
+function gb_queue_dispatcher_command(array $command_data, &$queued_filename = '', &$command_id = '') {
     $queue_result = null;
     if (!gb_enqueue_command_job($command_data, 'map.php:webui', '', 5, $queue_result)) {
         return false;
@@ -638,7 +622,7 @@ if (isset($_POST['ajax']) && $_POST['ajax'] === 'true') {
             if (!empty($command_data)) {
                 $queued_file = '';
                 $command_id = '';
-                if (gb_queue_dispatcher_command($commands_dir, $command_data, $queued_file, $command_id)) {
+                if (gb_queue_dispatcher_command($command_data, $queued_file, $command_id)) {
                     $response['success'] = true;
                     $response['message'] = 'Message sent successfully.';
                     gb_audit_map_log(
@@ -760,7 +744,7 @@ directory.";
                 ];
                 $queued_file = '';
                 $command_id = '';
-                if (gb_queue_dispatcher_command($commands_dir, $command_data, $queued_file, $command_id)) {
+                if (gb_queue_dispatcher_command($command_data, $queued_file, $command_id)) {
                     $message = "Admin command to clear SOS for node " . htmlspecialchars($node_id_to_clear) . " has been queued.";
                 } else {
                     $error = 'Failed to queue admin clear command. Please check server logs.';
@@ -1058,7 +1042,7 @@ directory.";
                 'requested_by_actor' => $audit_actor,
                 'requested_at' => gmdate('c'),
             ];
-            if (gb_queue_dispatcher_command($commands_dir, $command_data, $queued_file, $command_id)) {
+            if (gb_queue_dispatcher_command($command_data, $queued_file, $command_id)) {
                 $message = "Weather fetcher command queued as " . htmlspecialchars($queued_file) . " (ID: " . htmlspecialchars($command_id) . ").";
             } else {
                 $error = "Failed to queue weather fetcher command.";
@@ -1074,7 +1058,7 @@ directory.";
                 'requested_by_actor' => $audit_actor,
                 'requested_at' => gmdate('c'),
             ];
-            if (gb_queue_dispatcher_command($commands_dir, $command_data, $queued_file, $command_id)) {
+            if (gb_queue_dispatcher_command($command_data, $queued_file, $command_id)) {
                 $message = "Email processor command queued as " . htmlspecialchars($queued_file) . " (ID: " . htmlspecialchars($command_id) . ").";
             } else {
                 $error = "Failed to queue email processor command.";
@@ -1107,7 +1091,7 @@ directory.";
                 $error = "No dead-letter item selected for requeue.";
             } else {
                 $result = null;
-                if (gb_requeue_command_dead_letter($dead_letter_id, $commands_dir, $result)) {
+                if (gb_requeue_command_dead_letter($dead_letter_id, $result)) {
                     $queued_file = htmlspecialchars((string)($result['queued_file'] ?? 'unknown'));
                     $message = "Dead-letter command requeued as {$queued_file}.";
                 } else {
@@ -1123,7 +1107,7 @@ directory.";
                 $error = "No dead-letter item selected for deletion.";
             } else {
                 $result = null;
-                if (gb_delete_command_dead_letter_with_file($dead_letter_id, $commands_dir, $result)) {
+                if (gb_delete_command_dead_letter_with_file($dead_letter_id, $result)) {
                     $message = "Dead-letter command deleted.";
                 } else {
                     $why = htmlspecialchars((string)($result['error'] ?? 'unknown error'));
@@ -1228,7 +1212,7 @@ directory.";
                             'requested_by_actor' => $audit_actor,
                             'requested_at' => gmdate('c'),
                         ];
-                        if (gb_queue_dispatcher_command($commands_dir, $command_data, $queued_file, $command_id)) {
+                        if (gb_queue_dispatcher_command($command_data, $queued_file, $command_id)) {
                             $message = "Database backup command queued as " . htmlspecialchars($queued_file) . " (ID: " . htmlspecialchars($command_id) . ").";
                         } else {
                             $error = "Failed to queue database backup command.";
@@ -1288,7 +1272,7 @@ directory.";
                             'requested_by_actor' => $audit_actor,
                             'requested_at' => gmdate('c'),
                         ];
-                        if (gb_queue_dispatcher_command($commands_dir, $command_data, $queued_file, $command_id)) {
+                        if (gb_queue_dispatcher_command($command_data, $queued_file, $command_id)) {
                             $message = "Database restore command queued from " . htmlspecialchars($source_name) . " as " . htmlspecialchars($queued_file) . " (ID: " . htmlspecialchars($command_id) . ").";
                         } else {
                             $error = "Failed to queue database restore command.";
@@ -1303,7 +1287,7 @@ directory.";
                         'requested_by_actor' => $audit_actor,
                         'requested_at' => gmdate('c'),
                     ];
-                    if (gb_queue_dispatcher_command($commands_dir, $command_data, $queued_file, $command_id)) {
+                    if (gb_queue_dispatcher_command($command_data, $queued_file, $command_id)) {
                         $message = "SQLite VACUUM command queued as " . htmlspecialchars($queued_file) . " (ID: " . htmlspecialchars($command_id) . ").";
                     } else {
                         $error = "Failed to queue SQLite VACUUM command.";
@@ -1379,28 +1363,11 @@ $weather_age_seconds = get_iso_age_seconds($weather_current['timestamp'] ?? null
 $weather_is_stale = $weather_age_seconds !== null && $weather_age_seconds > ($weather_data_max_age_minutes * 60);
 $weather_age_label = format_age_string($weather_age_seconds);
 $weather_station_id = $weather_current['station_id'] ?? null;
-$legacy_counts = [
-    'dispatcher_jobs.json' => legacy_json_count($dispatcher_file),
-    'outgoing_emails.json' => legacy_json_count($outgoing_email_file),
-    'failed_dm_queue.json' => legacy_json_count($failed_dm_queue_file),
-];
 $db_counts = [
     'dispatcher_jobs' => count($dispatcher_jobs),
     'outgoing_emails' => count($outgoing_emails),
     'failed_dm_queue' => count($failed_dms),
 ];
-$legacy_files_exist = false;
-$legacy_present = false;
-foreach ($legacy_counts as $count) {
-    if ($count !== null) {
-        $legacy_files_exist = true;
-    }
-    if (is_int($count) && $count > 0) {
-        $legacy_present = true;
-    }
-}
-$db_has_data = ($db_counts['dispatcher_jobs'] > 0) || ($db_counts['outgoing_emails'] > 0) || ($db_counts['failed_dm_queue'] > 0);
-$migration_ok = $legacy_present ? $db_has_data : true;
 $days_of_week = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
 $sos_instructions_content = is_readable($sos_email_instructions_file) ? file_get_contents($sos_email_instructions_file) : '';
 $active_sos_node_id = null;
@@ -1430,9 +1397,8 @@ $setting_descriptions = [
     'FORECAST_AFTERNOON_SEND_TIME' => 'Time to broadcast the afternoon forecast (24-hour format, e.g., 16:30).',
     'COMMAND_BURST_LIMIT' => 'Max commands per sender within the burst window. Set to 0 to disable burst limiting.',
     'COMMAND_BURST_WINDOW_SECONDS' => 'Burst window size in seconds for command limiting.',
-    'COMMAND_FILE_READ_ATTEMPTS' => 'How many times to retry parsing queued command JSON files before dead-letter quarantine.',
-    'COMMAND_FILE_READ_BASE_DELAY_MS' => 'Initial retry delay in milliseconds for command-file JSON parse backoff.',
-    'COMMAND_FILE_READ_MAX_DELAY_MS' => 'Maximum retry delay in milliseconds for command-file JSON parse backoff.',
+    'COMMAND_COOLDOWN_SECONDS' => 'Minimum delay between accepted commands from the same sender. Set to 0 to disable.',
+    'MIN_SEND_INTERVAL_SECONDS' => 'Minimum spacing between outbound mesh sends. Lower values improve responsiveness but can increase radio congestion.',
     'COMMAND_RECEIPT_TTL_HOURS' => 'Hours to retain processed command receipts for duplicate suppression. Older receipts are pruned.',
     'EMAIL_RATE_LIMIT_MAX' => 'Max inbound emails per sender within the email window. Set to 0 to disable email limiting.',
     'EMAIL_RATE_LIMIT_WINDOW_SECONDS' => 'Email rate limit window size in seconds.',
@@ -2221,43 +2187,6 @@ strtotime($dm['timestamp']))) ?></span><br>
                         <?php endif; ?>
                     </div>
                 </div>
-                <?php if ($legacy_files_exist): ?>
-                <div class="card p-6 mb-6" id="legacy-migration-card">
-                    <div class="flex items-center justify-between mb-4">
-                        <h2 class="text-2xl font-bold text-slate-100">Legacy Migration Status</h2>
-                        <button type="button" class="btn btn-secondary btn-sm collapse-toggle" data-target="legacy-migration-card-body" aria-expanded="true">Collapse</button>
-                    </div>
-                    <div id="legacy-migration-card-body">
-                        <p class="text-slate-400 text-sm mb-4 max-w-3xl">
-                            SQLite is now the source of truth for queues and scheduled broadcasts. Legacy JSON files are read-only
-                            and can be removed after migration.
-                        </p>
-                        <div class="text-slate-300 space-y-2">
-                            <div>DB `dispatcher_jobs`: <span class="font-semibold"><?= htmlspecialchars((string)$db_counts['dispatcher_jobs']) ?></span></div>
-                            <div>DB `outgoing_emails`: <span class="font-semibold"><?= htmlspecialchars((string)$db_counts['outgoing_emails']) ?></span></div>
-                            <div>DB `failed_dm_queue`: <span class="font-semibold"><?= htmlspecialchars((string)$db_counts['failed_dm_queue']) ?></span></div>
-                            <div>Legacy `dispatcher_jobs.json`: <span class="font-semibold"><?= htmlspecialchars($legacy_counts['dispatcher_jobs.json'] === null ? 'missing' : (string)$legacy_counts['dispatcher_jobs.json']) ?></span></div>
-                            <div>Legacy `outgoing_emails.json`: <span class="font-semibold"><?= htmlspecialchars($legacy_counts['outgoing_emails.json'] === null ? 'missing' : (string)$legacy_counts['outgoing_emails.json']) ?></span></div>
-                            <div>Legacy `failed_dm_queue.json`: <span class="font-semibold"><?= htmlspecialchars($legacy_counts['failed_dm_queue.json'] === null ? 'missing' : (string)$legacy_counts['failed_dm_queue.json']) ?></span></div>
-                        </div>
-                        <div class="mt-4">
-                            <?php if ($migration_ok): ?>
-                                <div class="bg-green-500/10 border border-green-500/20 text-green-300 px-4 py-2 rounded-lg">
-                                    Migration OK. It is safe to remove legacy JSON files if desired.
-                                </div>
-                            <?php else: ?>
-                                <div class="bg-yellow-500/10 border border-yellow-500/20 text-yellow-300 px-4 py-2 rounded-lg">
-                                    Migration not confirmed. Legacy JSON has data but DB tables are empty.
-                                </div>
-                            <?php endif; ?>
-                        </div>
-                        <div class="mt-4 text-slate-400 text-sm">
-                            Cleanup script:
-                            <code class="bg-slate-700/60 text-slate-200 px-1 py-0.5 rounded text-sm">python3 /opt/GuardianBridge/scripts/cleanup_legacy_json.py --apply</code>
-                        </div>
-                    </div>
-                </div>
-                <?php endif; ?>
                 <div class="card p-6 mb-6" id="db-maintenance-card">
                     <div class="flex items-center justify-between mb-4">
                         <h2 class="text-2xl font-bold text-slate-100">Database Maintenance</h2>
@@ -2462,6 +2391,16 @@ an active SOS.</p>
                 <label for="setting_COMMAND_BURST_WINDOW_SECONDS" class="text-base font-semibold text-slate-200">Command Burst Window (Seconds)</label>
                 <p class="text-slate-400 text-sm mt-1 mb-3 max-w-3xl">Rolling window size for command burst limiting.</p>
                 <input type="number" id="setting_COMMAND_BURST_WINDOW_SECONDS" name="settings[COMMAND_BURST_WINDOW_SECONDS]" value="<?= htmlspecialchars($all_settings['COMMAND_BURST_WINDOW_SECONDS'] ?? 30) ?>" class="max-w-xs">
+            </div>
+            <div>
+                <label for="setting_COMMAND_COOLDOWN_SECONDS" class="text-base font-semibold text-slate-200">Command Cooldown (Seconds)</label>
+                <p class="text-slate-400 text-sm mt-1 mb-3 max-w-3xl">Minimum delay between accepted commands from the same sender. Set to 0 to disable.</p>
+                <input type="number" step="0.1" min="0" id="setting_COMMAND_COOLDOWN_SECONDS" name="settings[COMMAND_COOLDOWN_SECONDS]" value="<?= htmlspecialchars($all_settings['COMMAND_COOLDOWN_SECONDS'] ?? 1.0) ?>" class="max-w-xs">
+            </div>
+            <div>
+                <label for="setting_MIN_SEND_INTERVAL_SECONDS" class="text-base font-semibold text-slate-200">Min Send Interval (Seconds)</label>
+                <p class="text-slate-400 text-sm mt-1 mb-3 max-w-3xl">Minimum spacing between outbound mesh sends. Lower values improve responsiveness but can increase radio congestion.</p>
+                <input type="number" step="0.1" min="0.1" id="setting_MIN_SEND_INTERVAL_SECONDS" name="settings[MIN_SEND_INTERVAL_SECONDS]" value="<?= htmlspecialchars($all_settings['MIN_SEND_INTERVAL_SECONDS'] ?? 0.6) ?>" class="max-w-xs">
             </div>
             <div>
                 <label for="setting_EMAIL_RATE_LIMIT_MAX" class="text-base font-semibold text-slate-200">Email Rate Limit (Max)</label>
@@ -4297,7 +4236,7 @@ $day ?></label>
                 if (form.querySelector('input[name="action"][value="delete_user"]')) {
                     confirmationMessage = 'Are you sure you want to permanently delete this user?';
                 } else if (form.querySelector('input[name="action"][value="delete_dead_letter_command"]')) {
-                    confirmationMessage = 'Delete this dead-letter row and remove its quarantined file (if found)?';
+                    confirmationMessage = 'Delete this dead-letter row?';
                 } else if (form.querySelector('input[name="action"][value="requeue_dead_letter_command"]')) {
                     confirmationMessage = 'Requeue this dead-letter command for processing now?';
                 }
@@ -4314,7 +4253,7 @@ $day ?></label>
         const clearEmailQuarantineForm = document.getElementById('clear-email-quarantine-form');
         if(clearEmailQuarantineForm) { clearEmailQuarantineForm.addEventListener('submit', function(e) { e.preventDefault(); showConfirmModal('Are you sure you want to clear the outgoing email quarantine?', this); }); }
         const clearDeadLetterQueueForm = document.getElementById('clear-dead-letter-queue-form');
-        if(clearDeadLetterQueueForm) { clearDeadLetterQueueForm.addEventListener('submit', function(e) { e.preventDefault(); showConfirmModal('Are you sure you want to clear all dead-letter DB rows? Quarantined files will remain on disk unless deleted individually.', this); }); }
+        if(clearDeadLetterQueueForm) { clearDeadLetterQueueForm.addEventListener('submit', function(e) { e.preventDefault(); showConfirmModal('Are you sure you want to clear all dead-letter DB rows?', this); }); }
         
         const clearSosForm = document.getElementById('clear-sos-log-form');
         if(clearSosForm) { clearSosForm.addEventListener('submit', function(e) { e.preventDefault(); showConfirmModal('Are you sure you want to permanently delete the SOS log? This action cannot be undone.', this); }); }

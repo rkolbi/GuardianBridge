@@ -1,9 +1,7 @@
 import logging
 import os
 import re
-import hashlib
 import random
-import json
 import subprocess
 import sys
 import time
@@ -128,6 +126,9 @@ def _get_sender_subscriber_record(sender_id: str) -> dict[str, Any]:
     sender = str(sender_id or "").strip()
     if not sender:
         return {}
+    db_record = gb_db.get_subscriber(sender, case_insensitive=True)
+    if isinstance(db_record, dict):
+        return db_record
     with core.subscribers_lock:
         direct = core.subscribers.get(sender)
         if isinstance(direct, dict):
@@ -136,14 +137,6 @@ def _get_sender_subscriber_record(sender_id: str) -> dict[str, Any]:
         for node_id, sub_data in core.subscribers.items():
             if str(node_id).upper() == sender_upper and isinstance(sub_data, dict):
                 return sub_data
-    subscribers = gb_db.load_subscribers_dict() or {}
-    direct = subscribers.get(sender)
-    if isinstance(direct, dict):
-        return direct
-    sender_upper = sender.upper()
-    for node_id, sub_data in subscribers.items():
-        if str(node_id).upper() == sender_upper and isinstance(sub_data, dict):
-            return sub_data
     return {}
 
 
@@ -463,7 +456,12 @@ def _cmd_tagsend(sender: str, args: str):
         log_text = f"@{primary_tag} {message}"
     core.log_channel_message(sender, log_text, is_dm=False)
     for recipient_id in recipient_ids:
-        send_meshtastic_message(formatted_message, destinationId=recipient_id, suppress_log=True)
+        send_meshtastic_message(
+            formatted_message,
+            destinationId=recipient_id,
+            suppress_log=True,
+            priority=True,
+        )
     if locked_temp_tags:
         return f"Message sent. Skipped locked temporary group(s): {', '.join(sorted(locked_temp_tags))}."
     return None
@@ -728,7 +726,7 @@ def handle_meshtastic_command(sender: str, command_text: str) -> None:
             for response in responses:
                 if response:
                     full_response = f"{core.PREFIX_BOT_RESPONSE} {response}" if add_bot_prefix else response
-                    send_meshtastic_message(full_response, destinationId=sender, wantAck=True)
+                    send_meshtastic_message(full_response, destinationId=sender, wantAck=True, priority=True)
 
 
 def get_command_handler(text: str) -> Tuple[Callable[..., Any], Tuple[Any, ...]]:
@@ -755,11 +753,36 @@ def command_processor_worker() -> None:
     logging.info("Command processor thread started.")
     while True:
         try:
-            sender, text = core.command_queue.get()
+            queue_item = core.command_queue.get()
+            queued_at = None
+            if isinstance(queue_item, dict):
+                sender = queue_item.get("sender")
+                text = queue_item.get("text")
+                queued_at = queue_item.get("queued_at")
+            elif isinstance(queue_item, (tuple, list)):
+                if len(queue_item) < 2:
+                    logging.warning(f"Invalid command queue item ignored: {queue_item}")
+                    continue
+                sender, text = queue_item[0], queue_item[1]
+                if len(queue_item) >= 3:
+                    queued_at = queue_item[2]
+            else:
+                logging.warning(f"Invalid command queue item ignored: {queue_item}")
+                continue
             if sender is None:
                 break
+            text = str(text or "").strip()
+            if not text:
+                continue
 
             current_time = time.time()
+            if isinstance(queued_at, (int, float)):
+                queue_wait_ms = max(0.0, (current_time - float(queued_at)) * 1000.0)
+                core.record_latency_sample("command_queue_wait_ms", queue_wait_ms)
+                if queue_wait_ms >= core.COMMAND_QUEUE_WAIT_WARN_MS:
+                    logging.warning(f"Command queue wait high ({queue_wait_ms:.1f}ms) for sender {sender}.")
+
+            process_start = time.perf_counter()
             with core.user_last_command_time_lock:
                 if current_time - core.user_last_command_time.get(sender, 0) < core.COMMAND_COOLDOWN_SECONDS:
                     logging.warning(f"User {sender} rate-limited. Ignoring command: '{text}'")
@@ -792,45 +815,14 @@ def command_processor_worker() -> None:
 
             handler, args = get_command_handler(text)
             handler(sender, *args)
+            handler_ms = max(0.0, (time.perf_counter() - process_start) * 1000.0)
+            core.record_latency_sample("command_handler_ms", handler_ms)
+            if handler_ms >= core.COMMAND_HANDLER_WARN_MS:
+                logging.warning(f"Command handler slow ({handler_ms:.1f}ms) for sender {sender}.")
 
         except Exception as e:
             logging.error(f"Error in command processor thread: {e}", exc_info=True)
             core.record_runtime_error("command_processor_worker", str(e))
-
-
-def _derive_command_id(command_data: dict[str, Any], filepath: str) -> str:
-    explicit_id = str(command_data.get("command_id") or command_data.get("id") or "").strip()
-    if explicit_id:
-        return explicit_id
-    try:
-        serialized = json.dumps(command_data, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-    except Exception:
-        serialized = repr(command_data)
-    digest = hashlib.sha256(serialized.encode("utf-8", errors="replace")).hexdigest()[:20]
-    source = os.path.basename(filepath)
-    return f"file:{source}:{digest}"
-
-
-def _load_command_json_with_backoff(filepath: str) -> tuple[Optional[dict[str, Any]], Optional[str], int]:
-    max_attempts = max(1, int(getattr(settings, "COMMAND_FILE_READ_ATTEMPTS", 6)))
-    base_delay_ms = max(1, int(getattr(settings, "COMMAND_FILE_READ_BASE_DELAY_MS", 40)))
-    max_delay_ms = max(base_delay_ms, int(getattr(settings, "COMMAND_FILE_READ_MAX_DELAY_MS", 800)))
-    last_reason = "Unknown read failure."
-
-    for attempt in range(max_attempts):
-        command_data = core.load_json(filepath)
-        if isinstance(command_data, dict):
-            return command_data, None, (attempt + 1)
-        if command_data is not None:
-            last_reason = "Command file JSON payload must be an object."
-        else:
-            last_reason = "Invalid or empty JSON."
-        if attempt < (max_attempts - 1):
-            delay_ms = min(max_delay_ms, base_delay_ms * (2 ** attempt))
-            jitter_ms = random.randint(0, max(1, delay_ms // 5))
-            time.sleep((delay_ms + jitter_ms) / 1000.0)
-
-    return None, last_reason, max_attempts
 
 
 def _resolve_auto_backup_dir() -> str:
@@ -913,7 +905,13 @@ def _execute_command_payload(command_data: dict[str, Any], source_file: str) -> 
         )
         if not all([dest_id, r_name, text]):
             _raise_command_payload("Missing fields for dm command.", details={"command": cmd})
-        send_meshtastic_message(text=text, destinationId=dest_id, wantAck=True, text_for_log=f"@{r_name} {text}")
+        send_meshtastic_message(
+            text=text,
+            destinationId=dest_id,
+            wantAck=True,
+            text_for_log=f"@{r_name} {text}",
+            priority=True,
+        )
         processed_details["destinationId"] = dest_id
         return "processed", processed_details
 
@@ -939,6 +937,7 @@ def _execute_command_payload(command_data: dict[str, Any], source_file: str) -> 
                 destinationId=node_id,
                 wantAck=True,
                 suppress_log=True,
+                priority=True,
             )
             recipient_count += 1
         processed_details["recipient_count"] = recipient_count
@@ -985,7 +984,13 @@ def _execute_command_payload(command_data: dict[str, Any], source_file: str) -> 
         if recipient_ids:
             logging.info(f"Tag-based send to {len(recipient_ids)} recipients for tags: {target_tags}")
             for r_id in recipient_ids:
-                send_meshtastic_message(recipient_text, destinationId=r_id, wantAck=True, suppress_log=True)
+                send_meshtastic_message(
+                    recipient_text,
+                    destinationId=r_id,
+                    wantAck=True,
+                    suppress_log=True,
+                    priority=True,
+                )
             processed_details["recipient_count"] = len(recipient_ids)
         else:
             logging.warning(f"No subscribers found for tags {target_tags}. Message not sent.")
@@ -1071,7 +1076,7 @@ def _execute_command_payload(command_data: dict[str, Any], source_file: str) -> 
         command_text = command_data.get("command")
         if sender_id and isinstance(command_text, str) and command_text.strip():
             logging.info(f"Processing queued command from {sender_id}: '{command_text}'")
-            core.command_queue.put((sender_id, command_text))
+            core.enqueue_command(sender_id, command_text)
             processed_details["sender"] = sender_id
             return "processed", processed_details
         _raise_command_payload("Missing 'sender' or 'command' for queued command.", details={"command": cmd})
@@ -1179,132 +1184,3 @@ def process_command_jobs(max_jobs: Optional[int] = None) -> int:
             core.record_runtime_error("process_command_jobs", str(e))
 
     return processed_count
-
-
-def process_command_file(filepath: str) -> None:
-    error_dir = os.path.join(settings.COMMANDS_DIR, "error")
-    command_id = ""
-    source_file = os.path.basename(filepath)
-    command_data: Optional[dict[str, Any]] = None
-
-    def quarantine_file(reason, details=None):
-        nonlocal command_id
-        details_obj = details if isinstance(details, dict) else {}
-        command_id = command_id or f"file:{source_file}:unparsed"
-        logging.warning(f"Quarantining '{source_file}'. Reason: {reason}")
-        if not os.path.exists(error_dir):
-            os.makedirs(error_dir)
-        quarantined_name = f"{int(time.time())}_{source_file}"
-        quarantined_path = os.path.join(error_dir, quarantined_name)
-        recorded_details = dict(details_obj)
-        recorded_details.setdefault("reason", reason)
-        recorded_details.setdefault("source_file", source_file)
-        recorded_details.setdefault("quarantined_file", quarantined_name)
-        try:
-            os.replace(filepath, quarantined_path)
-        except Exception as move_e:
-            logging.error(f"Could not quarantine file {filepath}: {move_e}")
-            recorded_details["move_error"] = str(move_e)
-            try:
-                os.remove(filepath)
-            except Exception:
-                pass
-        else:
-            try:
-                meta_path = quarantined_path + ".meta.json"
-                with open(meta_path, "w", encoding="utf-8") as meta_file:
-                    json.dump(
-                        {
-                            "command_id": command_id,
-                            "reason": reason,
-                            "source_file": source_file,
-                            "timestamp": int(time.time()),
-                            "details": recorded_details,
-                        },
-                        meta_file,
-                        indent=2,
-                    )
-            except Exception as meta_e:
-                logging.error(f"Could not write dead-letter metadata for {quarantined_name}: {meta_e}")
-
-        try:
-            gb_db.add_command_dead_letter(command_id, source_file, reason, recorded_details)
-        except Exception as db_e:
-            logging.error(f"Failed to persist command dead-letter for {source_file}: {db_e}")
-        try:
-            gb_db.upsert_command_receipt(
-                command_id,
-                source_file=source_file,
-                status="dead-letter",
-                details=recorded_details,
-            )
-        except Exception as receipt_e:
-            logging.error(f"Failed to persist command receipt for dead-letter {source_file}: {receipt_e}")
-
-    try:
-        if not os.path.exists(filepath):
-            return
-
-        command_data, parse_error, attempts = _load_command_json_with_backoff(filepath)
-        if not command_data:
-            quarantine_file(parse_error or "Invalid or empty JSON.", details={"attempts": attempts})
-            return
-
-        command_id = _derive_command_id(command_data, filepath)
-        existing = gb_db.get_command_receipt(command_id)
-        if existing and str(existing.get("status", "")).strip().lower() in {"processed", "dead-letter"}:
-            logging.info(
-                f"Skipping duplicate command file '{source_file}' (command_id={command_id}, status={existing.get('status')})."
-            )
-            try:
-                os.remove(filepath)
-            except FileNotFoundError:
-                pass
-            return
-
-        max_attempts = max(1, int(getattr(settings, "COMMAND_JOB_MAX_ATTEMPTS", 5)))
-        enqueue_result = gb_db.enqueue_command_job(
-            command_data,
-            source_file=source_file,
-            command_id=command_id,
-            max_attempts=max_attempts,
-        )
-        if enqueue_result.get("enqueued"):
-            gb_db.upsert_command_receipt(
-                command_id,
-                source_file=source_file,
-                status="queued",
-                details={
-                    "command": command_data.get("command"),
-                    "job_id": enqueue_result.get("job_id"),
-                },
-            )
-        else:
-            logging.info(
-                f"Skipping duplicate command enqueue for '{source_file}' (command_id={command_id}, existing_status={enqueue_result.get('status')})."
-            )
-        os.remove(filepath)
-    except Exception as e:
-        logging.error(f"Failed to process command file {filepath}: {e}", exc_info=True)
-        core.record_runtime_error("process_command_file", str(e))
-        quarantine_file(
-            "Unhandled exception during processing.",
-            details={"exception": str(e), "command": command_data.get("command") if isinstance(command_data, dict) else None},
-        )
-    finally:
-        try:
-            ttl_hours = max(1, int(getattr(settings, "COMMAND_RECEIPT_TTL_HOURS", 72)))
-            gb_db.prune_command_receipts(ttl_hours=ttl_hours)
-        except Exception:
-            pass
-
-
-def handle_preexisting_commands() -> None:
-    command_dir = settings.COMMANDS_DIR
-    if not os.path.exists(command_dir):
-        os.makedirs(command_dir)
-        return
-    logging.info("Scanning for pre-existing command files...")
-    for filename in os.listdir(command_dir):
-        if filename.endswith(".json"):
-            process_command_file(os.path.join(command_dir, filename))

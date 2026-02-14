@@ -180,7 +180,7 @@ Temporary groups are stored separately from permanent profile tags and automatic
 
 MAP and MOP chat refresh now prefers an event-stream path with automatic fallback to polling when streaming is unavailable.
 
-Dispatcher command jobs now run from SQLite with retry/backoff, leasing, duplicate-suppression receipts, and dead-letter metadata for invalid payloads (legacy command-file ingestion remains supported).
+Dispatcher command jobs run from SQLite with retry/backoff, leasing, duplicate-suppression receipts, and dead-letter metadata for invalid payloads.
 
 MAP and MOP include dead-letter queue management in Actions (requeue/delete), and health panels now expose dispatcher alerts, queue depth/backlog signals, and latest exception details.
 

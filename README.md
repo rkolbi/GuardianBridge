@@ -121,8 +121,8 @@ Meshtastic is an open-source project that uses inexpensive LoRa radios for long-
 This project is built on three core principles:
 
 1.  **Resilience over Speed**: The system is designed to be fault-tolerant. Its modular architecture ensures that a failure in one component (like fetching email) will not crash the core radio dispatcher. This makes it reliable for long-term, unattended operation in potentially unstable conditions.
-2.  **Modularity and Simplicity**: Each major function is handled by a separate, simple script. This makes the system easier to understand, maintain, and extend. Communication via the file system is a deliberate choice to decouple the components, allowing them to work independently.
-3.  **Efficiency for Low-Power Devices**: The gateway is optimized to run 24/7 on single-board computers like the Raspberry Pi. The use of an event-driven architecture (`watchdog`) instead of constant polling minimizes unnecessary CPU cycles and disk I/O, respecting the resource constraints of such devices.
+2.  **Modularity and Simplicity**: Each major function is handled by a separate, simple script. This makes the system easier to understand, maintain, and extend while preserving clear boundaries between components.
+3.  **Efficiency for Low-Power Devices**: The gateway is optimized to run 24/7 on single-board computers like the Raspberry Pi. Queue-backed processing, adaptive polling, and bounded retries minimize unnecessary CPU cycles and disk I/O.
 
 ## 3\. Core Capabilities
 
@@ -148,13 +148,13 @@ The `weather_fetcher.py` script uses your configured `LATITUDE` and `LONGITUDE` 
 
 #### Two-Way Email Gateway
 
-  * **Sending (Mesh -\> Email)**: A user sends a DM to the gateway: `email/recipient@domain.com/Subject/Body`. The dispatcher enqueues this task in the SQLite `outgoing_emails` table (legacy JSON is migrated on first run and treated as read-only). The `email_processor.py` cron job picks it up, sends the email, and includes a helpful footer explaining how to reply.
+  * **Sending (Mesh -\> Email)**: A user sends a DM to the gateway: `email/recipient@domain.com/Subject/Body`. The dispatcher enqueues this task in the SQLite `outgoing_emails` table. The `email_processor.py` cron job picks it up, sends the email, and includes a helpful footer explaining how to reply.
   * **Receiving (Email -\> Mesh)**: A person sends an email to the gateway's address. The system uses a 4-tier logic to find the recipient:
     1.  It first checks the subject line for a node ID (e.g., `!a1b2c3d4`) or registered name.
     2.  If not found, it checks the full "To:" header for a node ID.
     3.  If not found, it checks the email body for the "sent the following message:" watermark from a previous reply.
     4.  As a last resort, it scans the entire email body for any node ID.
-        The `email_processor.py` script then intelligently strips the original message from the reply and enqueues a command job in SQLite (`command_jobs`). The dispatcher processes that queue with retry/backoff, leasing, duplicate suppression via receipt IDs, and dead-letter capture for invalid payloads. Legacy command files in `data/commands/` are still ingested for compatibility.
+        The `email_processor.py` script then intelligently strips the original message from the reply and enqueues a command job in SQLite (`command_jobs`). The dispatcher processes that queue with retry/backoff, leasing, duplicate suppression via receipt IDs, and dead-letter capture for invalid payloads.
   * **Broadcast (Email -\> Mesh)**: An authorized admin sends an email to the gateway's address with the subject `broadcast`. The system verifies the sender's permissions, prefixes the message with "FM [Admin Name]:", and broadcasts it to the entire network. A confirmation or rejection email is automatically sent back to the sender. If the subject is `!broadcast` or `broadcast!`, an audible bell character is prepended to the message for an alert.
 
 #### Tag-Based Group Messaging
@@ -167,7 +167,7 @@ This powerful feature allows for targeted communication to specific groups. Tags
 
 #### Flexible Scheduled Broadcasts
 
-Custom broadcasts are stored in the SQLite `dispatcher_jobs` table, managed by the web panel. Legacy JSON (`data/dispatcher_jobs.json`) is migrated on first run and treated as read-only. The dispatcher checks jobs every minute and evaluates each job's rules (`days`, `start_time`, `stop_time`, `interval_mins`) to see if a broadcast is due. It tracks the `last_sent` timestamp within the database to ensure it respects the specified interval.
+Custom broadcasts are stored in the SQLite `dispatcher_jobs` table, managed by the web panel. The dispatcher checks jobs every minute and evaluates each job's rules (`days`, `start_time`, `stop_time`, `interval_mins`) to see if a broadcast is due. It tracks the `last_sent` timestamp within the database to ensure it respects the specified interval.
 
 #### SOS Emergency Alert System
 
@@ -188,7 +188,7 @@ GuardianBridge ships with two complementary web UIs:
 
 * **Status Tab**: Your main dashboard for monitoring the gateway's health, including dispatcher/radio state, queue metrics, dead-letter counts, and the last time the weather/email cron jobs ran. It features a live map and node list that refreshes from `api_get_nodes.php` with adaptive backoff under failures (base interval from `POLLING_INTERVAL_MS`). Nodes with an active SOS are highlighted with a distinct red icon on the map and in the node list. The map uses mesh GPS coordinates by default, or **address coordinates** when a user has enabled "Use address coordinates for map display" (with automatic fallback if address coords are missing/invalid).
   * **Chat Tab**: Provides a real-time interface for monitoring and participating in mesh network conversations. It uses event-stream updates first and falls back to interval polling (`CHAT_POLLING_INTERVAL_MS`) when needed. You can broadcast messages to the main channel or send Direct Messages (DMs) to a specific user. Filters allow you to selectively show or hide Direct Messages and system-generated server messages. Clicking a user's Node ID opens a dedicated DM chat modal for private conversations.
-  * **Actions Tab**: Allows you to perform manual tasks like forcing an immediate weather fetch or email processing cycle. You can view and clear the outgoing email queue, inspect/export the outgoing email quarantine, view the failed direct message queue, and manage command dead-letters (requeue or delete rows; legacy file-backed dead-letters can include quarantined artifacts). A new "SOS Alert Log" displays a full history of all received SOS alerts. The Actions tab also shows a recent audit activity feed with JSON/CSV export controls.
+  * **Actions Tab**: Allows you to perform manual tasks like forcing an immediate weather fetch or email processing cycle. You can view and clear the outgoing email queue, inspect/export the outgoing email quarantine, view the failed direct message queue, and manage command dead-letters (requeue or delete rows). A new "SOS Alert Log" displays a full history of all received SOS alerts. The Actions tab also shows a recent audit activity feed with JSON/CSV export controls.
   * **Broadcasts Tab**: A powerful interface for managing custom, automated messages. You can create recurring jobs (e.g., a "Good Morning" message every weekday) or one-time announcements for a specific date and time range.
   * **Users Tab**: Provides full control over subscribers. You can edit user names, full names, phone numbers, email, addresses, and notes. You can also set **address latitude/longitude** and enable **"Use address coordinates for map display"** for that user. Subscriptions (alerts, weather, forecast) and advanced permissions (email send/receive/broadcast, node tag send) are managed here. You can manage assigned tags and set a "blocked" status to ignore all commands from a specific user. The tab displays both the assigned role and the live reported role from the node's radio, highlighting discrepancies.
   * **Settings Tab**: Allows for easy editing of the system's core configuration file (`.env`) and provides SQLite maintenance actions (integrity check, WAL checkpoint, audit prune, backup, restore, vacuum). Backup/Restore/VACUUM are queued and executed by the dispatcher through SQLite command jobs (no web-side `systemctl` control required). This is where you can change GPS coordinates, email credentials, broadcast intervals, rate limits, weather data staleness (e.g., `WEATHER_DATA_MAX_AGE_MINUTES`), temporary group inactivity TTL (`TEMP_GROUP_TTL_DAYS`), outgoing email quarantine retention, and audit retention controls (`AUDIT_RETENTION_DAYS`, `AUDIT_MAX_ROWS`). **Remember to restart the dispatcher service after saving `.env` changes.**
@@ -226,7 +226,7 @@ This guide walks you through the complete setup for both the backend services an
     ```
 2.  **Create data directories and set ownership:**
     ```bash
-    sudo mkdir -p /opt/GuardianBridge/data/commands
+    sudo mkdir -p /opt/GuardianBridge/data
     sudo chown -R pi:pi /opt/GuardianBridge 
     cd /opt/GuardianBridge
     ```
@@ -282,12 +282,13 @@ This guide walks you through the complete setup for both the backend services an
       * Generate a password hash (example): `php -r "echo password_hash('YourNewPassword', PASSWORD_DEFAULT) . PHP_EOL;"`
       * In `.env`, set `ADMIN_USERNAME` and `ADMIN_PASSWORD_HASH` to your desired values.
       * Restart the dispatcher service after updating `.env`.
-4.  **SQLite migration:** On first run, `guardianbridge.db` is created and legacy JSON files (`subscribers.json`, `node_status.json`, `channel0_log.json`, `sos_log.json`) are migrated automatically if present.
+4.  **SQLite database initialization:** On first run, `guardianbridge.db` is created automatically if it does not exist.
 5.  **Optional rate limiting settings (in `.env`):**
     * `COMMAND_BURST_LIMIT` and `COMMAND_BURST_WINDOW_SECONDS` control command bursts per sender.
+    * `COMMAND_COOLDOWN_SECONDS` sets the minimum delay between accepted commands from the same sender (`0` disables cooldown).
+    * `MIN_SEND_INTERVAL_SECONDS` sets minimum spacing between outbound mesh sends (lower = faster, higher = safer under heavy RF congestion).
     * `EMAIL_RATE_LIMIT_MAX` and `EMAIL_RATE_LIMIT_WINDOW_SECONDS` control inbound email bursts per sender.
     * Set a limit to `0` to disable that limiter.
-    * `COMMAND_FILE_READ_ATTEMPTS`, `COMMAND_FILE_READ_BASE_DELAY_MS`, and `COMMAND_FILE_READ_MAX_DELAY_MS` control command-file JSON parse retries before dead-letter quarantine.
     * `COMMAND_RECEIPT_TTL_HOURS` controls how long command receipts are retained for duplicate suppression.
 6.  **Optional server identity settings (in `.env`):**
     * `SERVER_NAME` sets the name returned by the `hello`/`hi` mesh command.
@@ -332,7 +333,7 @@ This guide walks you through the complete setup for both the backend services an
     # Process incoming and outgoing emails every 5 minutes
     */5 * * * * /usr/bin/python3 /opt/GuardianBridge/email_processor.py >> /opt/GuardianBridge/data/cron.log 2>&1
     ```
-4.  **Verify startup and migration:**
+4.  **Verify startup:**
     ```bash
     sudo journalctl -u guardianbridge.service -f
     ```
@@ -477,16 +478,16 @@ If you have been granted broadcast permission, you can send a message to all use
 
 ## 8\. System Architecture
 
-The system's stability comes from its modular design, where tasks are separated into distinct, independent scripts. SQLite is now the primary state and queue backbone, with legacy file-based command ingress still supported for compatibility. This prevents an error in one part of the system (like email fetching) from crashing another.
+The system's stability comes from its modular design, where tasks are separated into distinct, independent scripts. SQLite is the primary state and queue backbone, which helps isolate faults in one subsystem (like email fetching) from crashing another.
 
 For a developer-focused module map and data flow notes, see `Docs/ARCHITECTURE.md`.
 
-  * **`meshtastic_dispatcher.py`**: The core service that runs persistently. It listens for commands from users, sends messages, manages all scheduled broadcasts (weather, alerts, custom), and processes queued command jobs from SQLite (`command_jobs`) with retries/leases. It still ingests legacy command files detected by `watchdog`. It also handles SOS alerts, requests location updates, and retries failed direct messages from a queue.
+  * **`meshtastic_dispatcher.py`**: The core service that runs persistently. It listens for commands from users, sends messages, manages all scheduled broadcasts (weather, alerts, custom), and processes queued command jobs from SQLite (`command_jobs`) with retries/leases. It also handles SOS alerts, requests location updates, and retries failed direct messages from a queue.
   * **`weather_fetcher.py`**: A cron job that fetches data from the NWS API (current conditions, forecasts, alerts) and saves it to JSON files in the `data/` directory for the dispatcher to read and display.
   * **`email_processor.py`**: A cron job that handles both sending and receiving emails. It reads outgoing requests from the SQLite `outgoing_emails` table and enqueues incoming relay/broadcast work as SQLite command jobs for the dispatcher. It uses a 4-tier logic to find the intended mesh recipient.
   * **Admin Panel (`map.php`)**: The full web interface. When an admin performs an action like sending a broadcast or a DM, PHP enqueues a command job in SQLite instead of writing command files. It also reads live data from the API endpoints in `www/map-items/` to render the map and node lists.
   * **Mesh Operator Panel (`mop.php`)**: An operator-focused console that consumes the same API endpoints for live map/node data and emphasizes rapid response workflows (SOS banner, persistent SOS popup, compact overlays).
-  * **The `data/` Directory**: This folder stores runtime files and compatibility ingress points. SQLite (`guardianbridge.db`) is the primary queue/state store; `data/commands/` remains available for legacy command-file ingestion and quarantine.
+  * **The `data/` Directory**: This folder stores runtime files and state. SQLite (`guardianbridge.db`) is the primary queue/state store.
 
 ## 9\. File Structure
 
@@ -507,27 +508,14 @@ All files are located within the `/opt/GuardianBridge/` directory.
 |   `-- map-items/            # API endpoints, JS/CSS assets, map tiles
 `-- data/                     # Directory for all runtime data
     |-- guardianbridge.db     # SQLite DB: subscribers, node_status, chat_log, sos_log, temp_groups
-    |-- outgoing_emails.json  # Legacy queue (migrated to SQLite; read-only)
-    |-- failed_dm_queue.json  # Legacy queue (migrated to SQLite; read-only)
     |-- email_rate_limit.json # Inbound email rate limit state
     |-- weather_current.json  # Latest weather observation from NWS
     |-- weather_forecast.json # Latest multi-day forecast from NWS
     |-- nws_alerts.json       # Current active NWS alerts
-    |-- dispatcher_jobs.json  # Legacy schedule (migrated to SQLite; read-only)
     |-- dispatcher_state.json # Stores last-sent times for scheduled broadcasts
     |-- dispatcher_status.json# Health status for the web panel
-    |-- *.lastrun             # Files indicating cron jobs ran
-    `-- commands/             # Legacy command-file ingress (optional compatibility path)
-        `-- error/            # Quarantined/malformed legacy command files
+    `-- *.lastrun             # Files indicating cron jobs ran
 ```
-
-
-Legacy `subscribers.json`, `node_status.json`, `channel0_log.json`, and `sos_log.json` (if present) are automatically migrated into `guardianbridge.db` on first run.
-Legacy queue/schedule files remain read-only by default. If you want to remove them after migration, use:
-```
-python3 /opt/GuardianBridge/scripts/cleanup_legacy_json.py --apply
-```
-
 ## 10\. Troubleshooting
 
   * **Gateway is not responding**: Check the service status with `sudo systemctl status guardianbridge.service`. Look at the logs with `journalctl -u guardianbridge.service -f` for errors. Ensure the Meshtastic device is powered and connected.
@@ -537,7 +525,7 @@ python3 /opt/GuardianBridge/scripts/cleanup_legacy_json.py --apply
   * **Admin Panel shows "failed to write" or "not readable" errors**: This is almost always a file permissions issue. Ensure the web server user (`www-data`) has write access to the `/opt/GuardianBridge/` directory and its contents. Refer to the installation steps.
   * **A user is blocked/unblocked, but it doesn't take effect**: Restart the dispatcher service (`sudo systemctl restart guardianbridge.service`) to force it to reload subscribers from `guardianbridge.db`.
   * **Settings changed in panel but not taking effect**: You must restart the main dispatcher service after saving changes to the `.env` file: `sudo systemctl restart guardianbridge.service`.
-  * **SOS alert not clearing or not being received by responders**: Verify the node's `sos` status in the `node_status` table and the SOS entries in the `sos_log` table inside `guardianbridge.db`. Ensure responders have the correct tags assigned in the `subscribers` table. Check dispatcher logs for errors during SOS processing or message sending. If an admin clear command was used, verify it was queued and processed in SQLite `command_jobs` (or legacy `data/commands/` ingestion if used).
+  * **SOS alert not clearing or not being received by responders**: Verify the node's `sos` status in the `node_status` table and the SOS entries in the `sos_log` table inside `guardianbridge.db`. Ensure responders have the correct tags assigned in the `subscribers` table. Check dispatcher logs for errors during SOS processing or message sending. If an admin clear command was used, verify it was queued and processed in SQLite `command_jobs`.
 
 ## 11\. Project Roadmap
 

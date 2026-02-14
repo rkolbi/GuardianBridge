@@ -3,7 +3,6 @@ import json
 import os
 import sys
 import tempfile
-import threading
 import time
 import types
 import unittest
@@ -79,27 +78,6 @@ def _install_stubs():
     pubsub.pub = DummyPub()
     _install_stub("pubsub", pubsub)
 
-    # watchdog
-    watchdog = types.ModuleType("watchdog")
-    watchdog_observers = types.ModuleType("watchdog.observers")
-    watchdog_events = types.ModuleType("watchdog.events")
-    class DummyObserver:
-        def schedule(self, *args, **kwargs):
-            return None
-        def start(self):
-            return None
-        def stop(self):
-            return None
-        def join(self):
-            return None
-    class DummyEventHandler:
-        pass
-    watchdog_observers.Observer = DummyObserver
-    watchdog_events.FileSystemEventHandler = DummyEventHandler
-    _install_stub("watchdog", watchdog)
-    _install_stub("watchdog.observers", watchdog_observers)
-    _install_stub("watchdog.events", watchdog_events)
-
 
 def _import_dispatcher():
     _install_stubs()
@@ -123,7 +101,6 @@ class DispatcherTests(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
 
         self.dispatcher.settings.DATA_DIR = self.temp_dir.name
-        self.dispatcher.settings.COMMANDS_DIR = os.path.join(self.temp_dir.name, "commands")
         self.dispatcher.settings.SUBSCRIBERS_FILE = os.path.join(self.temp_dir.name, "subscribers.json")
         self.dispatcher.settings.NODE_STATUS_FILE = os.path.join(self.temp_dir.name, "node_status.json")
         self.dispatcher.settings.SOS_LOG_FILE = os.path.join(self.temp_dir.name, "sos_log.json")
@@ -148,7 +125,6 @@ class DispatcherTests(unittest.TestCase):
         self.dispatcher.settings.TEMP_GROUP_TTL_DAYS = 14
         self.dispatcher.settings.FORECAST_SEND_TIMES = ["07:00", "19:00"]
 
-        os.makedirs(self.dispatcher.settings.COMMANDS_DIR, exist_ok=True)
         os.makedirs(self.dispatcher.settings.AUTO_BACKUP_DIR, exist_ok=True)
         self.dispatcher.gb_db._initialized = False
         self.dispatcher.gb_db.ensure_db()
@@ -225,36 +201,21 @@ class DispatcherTests(unittest.TestCase):
         self.assertEqual(command, "?")
         self.assertEqual(args, "")
 
-    def test_process_command_file_retries_partial_json(self):
+    def test_process_queued_broadcast_command(self):
         sent = []
         def fake_send(text, **kwargs):
             sent.append((text, kwargs))
         self.dispatcher.commands.send_meshtastic_message = fake_send
 
-        cmd_path = os.path.join(self.dispatcher.settings.COMMANDS_DIR, "broadcast_test.json")
-        with open(cmd_path, "w") as f:
-            f.write("{\"command\": \"broadcast\", \"text\": \"hello\"")
-
-        def fix_file():
-            time.sleep(0.05)
-            with open(cmd_path, "w") as f:
-                json.dump({"command": "broadcast", "text": "hello"}, f)
-
-        t = threading.Thread(target=fix_file)
-        t.start()
-
-        self.dispatcher.process_command_file(cmd_path)
+        self.dispatcher.gb_db.enqueue_command_job(
+            {"command": "broadcast", "text": "hello"},
+            source_file="test:broadcast",
+        )
         self.dispatcher.commands.process_command_jobs(max_jobs=5)
-        t.join()
 
         self.assertTrue(any(msg[0] == "hello" for msg in sent))
-        self.assertFalse(os.path.exists(cmd_path))
 
-        error_dir = os.path.join(self.dispatcher.settings.COMMANDS_DIR, "error")
-        if os.path.exists(error_dir):
-            self.assertEqual(os.listdir(error_dir), [])
-
-    def test_sqlite_migration_from_json(self):
+    def test_sqlite_does_not_migrate_from_json(self):
         subscribers = {"!abc": {"name": "Alice"}}
         node_status = {"!abc": {"sos": "SOS"}}
         channel_log = [{"from": "!abc", "timestamp": "12:00 01/01", "text": "hi"}]
@@ -273,18 +234,17 @@ class DispatcherTests(unittest.TestCase):
         self.dispatcher.gb_db.ensure_db()
 
         loaded_subs = self.dispatcher.gb_db.load_subscribers_dict()
-        self.assertEqual(loaded_subs["!abc"]["name"], "Alice")
+        self.assertEqual(loaded_subs, {})
 
         loaded_nodes = self.dispatcher.gb_db.load_node_statuses_dict()
-        self.assertEqual(loaded_nodes["!abc"]["sos"], "SOS")
+        self.assertEqual(loaded_nodes, {})
 
         messages, last_id = self.dispatcher.gb_db.get_chat_logs()
-        self.assertEqual(len(messages), 1)
-        self.assertEqual(messages[0]["text"], "hi")
+        self.assertEqual(len(messages), 0)
+        self.assertEqual(last_id, 0)
 
         sos_entries = self.dispatcher.gb_db.load_sos_logs()
-        self.assertEqual(len(sos_entries), 1)
-        self.assertTrue(sos_entries[0]["active"])
+        self.assertEqual(len(sos_entries), 0)
 
     def test_handle_sos_alert_creates_log_and_status(self):
         sender_id = "!aaaa1111"
@@ -471,12 +431,11 @@ class DispatcherTests(unittest.TestCase):
             "!c3": {},
         }
 
-        cmd_path = os.path.join(self.dispatcher.settings.COMMANDS_DIR, "broadcast_subscribers.json")
         try:
-            with open(cmd_path, "w") as f:
-                json.dump({"command": "broadcast_subscribers", "text": "Hello all"}, f)
-
-            self.dispatcher.commands.process_command_file(cmd_path)
+            self.dispatcher.gb_db.enqueue_command_job(
+                {"command": "broadcast_subscribers", "text": "Hello all"},
+                source_file="test:broadcast_subscribers",
+            )
             self.dispatcher.commands.process_command_jobs(max_jobs=5)
 
             dests = sorted([msg.get("destinationId") for msg in sent])
@@ -634,7 +593,7 @@ class DispatcherTests(unittest.TestCase):
         self.assertNotIn("active_tag_channel", status_a)
         self.assertNotIn("active_tag_channel", status_b)
 
-    def test_process_command_file_run_weather_fetcher_command(self):
+    def test_process_queued_run_weather_fetcher_command(self):
         weather_script = os.path.join(self.dispatcher.settings.BASE_DIR, "weather_fetcher.py")
         with open(weather_script, "w", encoding="utf-8") as f:
             f.write("print('ok')\n")
@@ -653,22 +612,20 @@ class DispatcherTests(unittest.TestCase):
             return DummyResult()
 
         self.dispatcher.commands.subprocess.run = fake_run
-        cmd_path = os.path.join(self.dispatcher.settings.COMMANDS_DIR, "run_weather_fetcher.json")
-        with open(cmd_path, "w", encoding="utf-8") as f:
-            json.dump({"command": "run_weather_fetcher"}, f)
-
         try:
-            self.dispatcher.commands.process_command_file(cmd_path)
+            self.dispatcher.gb_db.enqueue_command_job(
+                {"command": "run_weather_fetcher"},
+                source_file="test:run_weather_fetcher",
+            )
             self.dispatcher.commands.process_command_jobs(max_jobs=5)
         finally:
             self.dispatcher.commands.subprocess.run = original_run
 
         self.assertEqual(len(calls), 1)
         self.assertTrue(calls[0][0][1].endswith("weather_fetcher.py"))
-        self.assertFalse(os.path.exists(cmd_path))
         self.assertEqual(self.dispatcher.gb_db.count_command_dead_letters(), 0)
 
-    def test_process_command_file_maintenance_backup_and_restore(self):
+    def test_process_queued_maintenance_backup_and_restore(self):
         auto_dir = self.dispatcher.settings.AUTO_BACKUP_DIR
         source_path = os.path.join(auto_dir, "uploaded_restore_20260213_000001_abcd1234.db")
         with open(source_path, "wb") as f:
@@ -690,23 +647,19 @@ class DispatcherTests(unittest.TestCase):
         self.dispatcher.commands.gb_db.create_db_backup = fake_create_db_backup
         self.dispatcher.commands.gb_db.restore_database_from_backup = fake_restore_database
 
-        backup_cmd = os.path.join(self.dispatcher.settings.COMMANDS_DIR, "maintenance_backup_db.json")
-        restore_cmd = os.path.join(self.dispatcher.settings.COMMANDS_DIR, "maintenance_restore_db.json")
-        with open(backup_cmd, "w", encoding="utf-8") as f:
-            json.dump({"command": "maintenance_backup_db"}, f)
-        with open(restore_cmd, "w", encoding="utf-8") as f:
-            json.dump(
+        try:
+            self.dispatcher.gb_db.enqueue_command_job(
+                {"command": "maintenance_backup_db"},
+                source_file="test:maintenance_backup_db",
+            )
+            self.dispatcher.gb_db.enqueue_command_job(
                 {
                     "command": "maintenance_restore_db",
                     "source_db_path": source_path,
                     "cleanup_source": True,
                 },
-                f,
+                source_file="test:maintenance_restore_db",
             )
-
-        try:
-            self.dispatcher.commands.process_command_file(backup_cmd)
-            self.dispatcher.commands.process_command_file(restore_cmd)
             self.dispatcher.commands.process_command_jobs(max_jobs=10)
         finally:
             self.dispatcher.commands.gb_db.create_db_backup = original_create_backup
@@ -717,39 +670,42 @@ class DispatcherTests(unittest.TestCase):
         self.assertFalse(os.path.exists(source_path))
         self.assertEqual(self.dispatcher.gb_db.count_command_dead_letters(), 0)
 
-    def test_process_command_file_maintenance_restore_rejects_outside_path(self):
+    def test_process_queued_maintenance_restore_rejects_outside_path(self):
         invalid_source = os.path.join(self.temp_dir.name, "outside_restore.db")
         with open(invalid_source, "wb") as f:
             f.write(b"sqlite-mock")
 
-        cmd_path = os.path.join(self.dispatcher.settings.COMMANDS_DIR, "maintenance_restore_invalid.json")
-        with open(cmd_path, "w", encoding="utf-8") as f:
-            json.dump(
-                {
-                    "command": "maintenance_restore_db",
-                    "source_db_path": invalid_source,
-                },
-                f,
-            )
-
-        self.dispatcher.commands.process_command_file(cmd_path)
+        self.dispatcher.gb_db.enqueue_command_job(
+            {
+                "command": "maintenance_restore_db",
+                "source_db_path": invalid_source,
+            },
+            source_file="test:maintenance_restore_invalid",
+        )
         self.dispatcher.commands.process_command_jobs(max_jobs=5)
-        self.assertFalse(os.path.exists(cmd_path))
         self.assertEqual(self.dispatcher.gb_db.count_command_dead_letters(), 1)
 
     def test_update_dispatcher_status_includes_alert_metrics(self):
-        stale_cmd = os.path.join(self.dispatcher.settings.COMMANDS_DIR, "queued_stale.json")
-        with open(stale_cmd, "w", encoding="utf-8") as f:
-            json.dump({"command": "broadcast", "text": "x"}, f)
-        old_time = int(time.time()) - 600
-        os.utime(stale_cmd, (old_time, old_time))
+        self.dispatcher.gb_db.enqueue_command_job(
+            {"command": "broadcast", "text": "x"},
+            source_file="test:queued_stale",
+        )
 
         self.dispatcher.gb_db.add_command_dead_letter("cid1", "queued_stale.json", "test", {"x": 1})
         self.dispatcher.core.send_queue.put("m1")
         self.dispatcher.core.command_queue.put(("!a", "help"))
         self.dispatcher.core.iface = None
         self.dispatcher.core.record_runtime_error("test", "boom")
-        self.dispatcher.core.update_dispatcher_status()
+        future_now = int(time.time()) + 600
+        original_core_time = self.dispatcher.core.time.time
+        original_db_time = self.dispatcher.gb_db.time.time
+        try:
+            self.dispatcher.core.time.time = lambda: future_now
+            self.dispatcher.gb_db.time.time = lambda: future_now
+            self.dispatcher.core.update_dispatcher_status()
+        finally:
+            self.dispatcher.core.time.time = original_core_time
+            self.dispatcher.gb_db.time.time = original_db_time
 
         payload = self.dispatcher.core.load_json(self.dispatcher.settings.DISPATCHER_STATUS_FILE)
         self.assertIsInstance(payload, dict)

@@ -447,6 +447,9 @@ def process_incoming_emails():
 
 def send_pending_outgoing_emails():
     lock_path = settings.OUTGOING_EMAIL_FILE + ".lock"
+    sent_ids = []
+    invalid_ids = []
+    to_delete = []
 
     try:
         with file_lock(lock_path):
@@ -454,8 +457,6 @@ def send_pending_outgoing_emails():
             if not messages:
                 return
             subscribers = gb_db.load_subscribers_dict() or {}
-            sent_ids = []
-            invalid_ids = []
             with smtplib.SMTP(settings.SMTP_SERVER, settings.SMTP_PORT) as smtp:
                 smtp.starttls()
                 smtp.login(settings.EMAIL_USER, settings.EMAIL_PASS)
@@ -534,12 +535,17 @@ def send_pending_outgoing_emails():
                     smtp.send_message(email_msg)
                     sent_ids.append(msg_data.get("id"))
                     logging.info(f"Sent email from {sender_name} to {recipient}")
-            to_delete = [msg_id for msg_id in sent_ids if msg_id]
-            to_delete.extend([msg_id for msg_id in invalid_ids if msg_id])
-            if to_delete:
-                gb_db.delete_outgoing_emails(to_delete)
     except Exception as e:
         logging.error(f"Failed to send outgoing emails: {e}", exc_info=True)
+    finally:
+        # Persist progress even on partial SMTP failure to avoid duplicate re-sends.
+        to_delete = [msg_id for msg_id in sent_ids if msg_id]
+        to_delete.extend([msg_id for msg_id in invalid_ids if msg_id])
+        if to_delete:
+            try:
+                gb_db.delete_outgoing_emails(to_delete)
+            except Exception as delete_err:
+                logging.error(f"Failed to delete processed outgoing email rows: {delete_err}", exc_info=True)
 
 if __name__ == "__main__":
     lock_path = os.path.join(settings.DATA_DIR, "email_processor.lock")

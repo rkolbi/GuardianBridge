@@ -87,13 +87,11 @@ DATA_DIR = os.path.join(BASE_DIR, "data")
 DB_PATH = os.path.join(DATA_DIR, "guardianbridge.db")
 # Directory for automatic scheduled DB backups.
 AUTO_BACKUP_DIR = os.path.join(BASE_DIR, "AutoBackUp")
-# Path to the JSON file storing Meshtastic node status information.
+# JSON cache path used by APIs and diagnostics.
 NODE_STATUS_FILE = os.path.join(DATA_DIR, "node_status.json")
-# Path to the JSON file storing subscriber information (e.g., email, preferences).
+# Subscriber updates are persisted in SQLite (this path is kept for lock/file utility calls).
 SUBSCRIBERS_FILE = os.path.join(DATA_DIR, "subscribers.json")
-# Directory for storing incoming command files from email or other sources.
-COMMANDS_DIR = os.path.join(DATA_DIR, "commands")
-# Path to the JSON file for queuing outgoing emails.
+# Legacy lock-path retained for email processor file-lock semantics.
 OUTGOING_EMAIL_FILE = os.path.join(DATA_DIR, "outgoing_emails.json")
 # Path to the JSON file storing current weather conditions.
 WEATHER_CURRENT_FILE = os.path.join(DATA_DIR, "weather_current.json")
@@ -105,15 +103,15 @@ WEATHER_ALERTS_FILE = os.path.join(DATA_DIR, "nws_alerts.json")
 DISPATCHER_STATE_FILE = os.path.join(DATA_DIR, "dispatcher_state.json")
 # Path to the JSON file storing the dispatcher's current status.
 DISPATCHER_STATUS_FILE = os.path.join(DATA_DIR, "dispatcher_status.json")
-# Path to the JSON file defining scheduled dispatcher jobs (e.g., custom broadcasts).
+# JSON cache/compatibility path used by tests and tooling.
 DISPATCHER_JOBS_FILE = os.path.join(DATA_DIR, "dispatcher_jobs.json")
 # Path to a timestamp file indicating the last successful run of the weather fetcher.
 WEATHER_FETCHER_LASTRUN_FILE = os.path.join(DATA_DIR, "weather_fetcher.lastrun")
 # Path to a timestamp file indicating the last successful run of the email processor.
 EMAIL_PROCESSOR_LASTRUN_FILE = os.path.join(DATA_DIR, "email_processor.lastrun")
-# Path to the JSON file for queuing failed direct messages for retry.
+# JSON cache/compatibility path used by tests and tooling.
 FAILED_DM_QUEUE_FILE = os.path.join(DATA_DIR, "failed_dm_queue.json")
-# Path to the JSON file for logging SOS events.
+# JSON cache/compatibility path used by tests and tooling.
 SOS_LOG_FILE = os.path.join(DATA_DIR, "sos_log.json") 
 # Path to a text file containing instructions for SOS email notifications.
 SOS_EMAIL_INSTRUCTIONS_FILE = os.path.join(DATA_DIR, "sos_email_instructions.txt")
@@ -134,12 +132,18 @@ STALE_NODE_MINUTES = _getenv_int("STALE_NODE_MINUTES", 120)
 COMMAND_BURST_LIMIT = _getenv_int("COMMAND_BURST_LIMIT", 8)
 # Window size in seconds for command burst limiting.
 COMMAND_BURST_WINDOW_SECONDS = _getenv_int("COMMAND_BURST_WINDOW_SECONDS", 30)
-# Maximum attempts to parse incoming command JSON files before quarantine.
-COMMAND_FILE_READ_ATTEMPTS = _getenv_int("COMMAND_FILE_READ_ATTEMPTS", 6)
-# Initial backoff delay (ms) between command file parse attempts.
-COMMAND_FILE_READ_BASE_DELAY_MS = _getenv_int("COMMAND_FILE_READ_BASE_DELAY_MS", 40)
-# Maximum backoff delay (ms) while retrying command file parsing.
-COMMAND_FILE_READ_MAX_DELAY_MS = _getenv_int("COMMAND_FILE_READ_MAX_DELAY_MS", 800)
+# Minimum seconds between accepted commands from the same sender (0 disables cooldown).
+COMMAND_COOLDOWN_SECONDS = max(0.0, _getenv_float("COMMAND_COOLDOWN_SECONDS", 1.0))
+# Minimum spacing between outbound mesh sends to reduce radio congestion.
+MIN_SEND_INTERVAL_SECONDS = max(0.1, _getenv_float("MIN_SEND_INTERVAL_SECONDS", 0.6))
+# Warn threshold (milliseconds) for command queue wait time (enqueue -> dequeue).
+COMMAND_QUEUE_WAIT_WARN_MS = _getenv_int("COMMAND_QUEUE_WAIT_WARN_MS", 1500)
+# Warn threshold (milliseconds) for command handler execution time.
+COMMAND_HANDLER_WARN_MS = _getenv_int("COMMAND_HANDLER_WARN_MS", 2500)
+# Warn threshold (milliseconds) for send queue wait time (enqueue -> dequeue).
+SEND_QUEUE_WAIT_WARN_MS = _getenv_int("SEND_QUEUE_WAIT_WARN_MS", 3000)
+# Warn threshold (milliseconds) for radio send execution time.
+SEND_EXEC_WARN_MS = _getenv_int("SEND_EXEC_WARN_MS", 2000)
 # Retention for processed command receipts used for idempotency.
 COMMAND_RECEIPT_TTL_HOURS = _getenv_int("COMMAND_RECEIPT_TTL_HOURS", 72)
 # Maximum delivery attempts for queued command jobs before dead-lettering.
@@ -153,7 +157,7 @@ COMMAND_JOB_RETRY_MAX_SECONDS = _getenv_int("COMMAND_JOB_RETRY_MAX_SECONDS", 300
 # Number of queued command jobs processed per scheduler tick.
 COMMAND_JOB_BATCH_SIZE = _getenv_int("COMMAND_JOB_BATCH_SIZE", 20)
 # Poll interval (seconds) for command job processing.
-COMMAND_JOB_POLL_SECONDS = _getenv_int("COMMAND_JOB_POLL_SECONDS", 1)
+COMMAND_JOB_POLL_SECONDS = max(0.1, _getenv_float("COMMAND_JOB_POLL_SECONDS", 0.5))
 # Retention for completed/failed command jobs.
 COMMAND_JOB_RETENTION_HOURS = _getenv_int("COMMAND_JOB_RETENTION_HOURS", 168)
 # Maximum number of incoming emails allowed per sender within a rolling window (0 disables email rate limiting).

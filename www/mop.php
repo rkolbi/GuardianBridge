@@ -25,7 +25,6 @@ $revision = 'v1.4.0 "Dispatch"';
 require_once __DIR__ . '/db.php';
 $base_dir = '/opt/GuardianBridge';
 $env_file = $base_dir . '/.env';
-$commands_dir = $base_dir . '/data/commands';
 $gb_page_perf_start = microtime(true);
 register_shutdown_function(function () use ($gb_page_perf_start) {
     $elapsed_ms = (microtime(true) - $gb_page_perf_start) * 1000;
@@ -337,7 +336,7 @@ function write_json_atomic($file_path, $data) {
     return true;
 }
 
-function gb_queue_dispatcher_command($commands_dir, array $command_data, &$queued_filename = '', &$command_id = '') {
+function gb_queue_dispatcher_command(array $command_data, &$queued_filename = '', &$command_id = '') {
     $queue_result = null;
     if (!gb_enqueue_command_job($command_data, 'mop.php:webui', '', 5, $queue_result)) {
         return false;
@@ -436,7 +435,7 @@ if (isset($_POST['ajax']) && $_POST['ajax'] === 'true') {
                 ];
                 $queued_file = '';
                 $command_id = '';
-                if (gb_queue_dispatcher_command($commands_dir, $command_data, $queued_file, $command_id)) {
+                if (gb_queue_dispatcher_command($command_data, $queued_file, $command_id)) {
                     $response['success'] = true;
                     $response['message'] = 'Message queued.';
                     gb_audit_mop_log(
@@ -523,7 +522,7 @@ if (isset($_POST['ajax']) && $_POST['ajax'] === 'true') {
             if (!empty($command_data)) {
                 $queued_file = '';
                 $command_id = '';
-                if (gb_queue_dispatcher_command($commands_dir, $command_data, $queued_file, $command_id)) {
+                if (gb_queue_dispatcher_command($command_data, $queued_file, $command_id)) {
                     $response['success'] = true;
                     $response['message'] = 'Message sent successfully.';
                     gb_audit_mop_log(
@@ -627,7 +626,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['ajax'])) {
                 ];
                 $queued_file = '';
                 $command_id = '';
-                if (gb_queue_dispatcher_command($commands_dir, $command_data, $queued_file, $command_id)) {
+                if (gb_queue_dispatcher_command($command_data, $queued_file, $command_id)) {
                     $message = "Admin command to clear SOS for node " . htmlspecialchars($node_id_to_clear) . " has been queued.";
                 } else {
                     $error = 'Failed to queue admin clear command. Please check server logs.';
@@ -823,7 +822,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['ajax'])) {
                 'requested_by_actor' => $audit_actor,
                 'requested_at' => gmdate('c'),
             ];
-            if (gb_queue_dispatcher_command($commands_dir, $command_data, $queued_file, $command_id)) {
+            if (gb_queue_dispatcher_command($command_data, $queued_file, $command_id)) {
                 $message = 'Weather fetcher command queued as ' . htmlspecialchars($queued_file) . ' (ID: ' . htmlspecialchars($command_id) . ').';
             } else {
                 $error = 'Failed to queue weather fetcher command.';
@@ -839,7 +838,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['ajax'])) {
                 'requested_by_actor' => $audit_actor,
                 'requested_at' => gmdate('c'),
             ];
-            if (gb_queue_dispatcher_command($commands_dir, $command_data, $queued_file, $command_id)) {
+            if (gb_queue_dispatcher_command($command_data, $queued_file, $command_id)) {
                 $message = 'Email processor command queued as ' . htmlspecialchars($queued_file) . ' (ID: ' . htmlspecialchars($command_id) . ').';
             } else {
                 $error = 'Failed to queue email processor command.';
@@ -875,7 +874,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['ajax'])) {
                     $error = 'No dead-letter item selected for requeue.';
                 } else {
                     $result = null;
-                    if (gb_requeue_command_dead_letter($dead_letter_id, $commands_dir, $result)) {
+                    if (gb_requeue_command_dead_letter($dead_letter_id, $result)) {
                         $queued_file = htmlspecialchars((string)($result['queued_file'] ?? 'unknown'));
                         $message = "Dead-letter command requeued as {$queued_file}.";
                     } else {
@@ -895,7 +894,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['ajax'])) {
                     $error = 'No dead-letter item selected for deletion.';
                 } else {
                     $result = null;
-                    if (gb_delete_command_dead_letter_with_file($dead_letter_id, $commands_dir, $result)) {
+                    if (gb_delete_command_dead_letter_with_file($dead_letter_id, $result)) {
                         $message = 'Dead-letter command deleted.';
                     } else {
                         $why = htmlspecialchars((string)($result['error'] ?? 'unknown error'));
@@ -5830,7 +5829,7 @@ $recent_audit_entries = gb_load_audit_logs($audit_preview_limit, $audit_scope_pa
             if (clearDeadLetterQueueForm) {
                 clearDeadLetterQueueForm.addEventListener('submit', function(e) {
                     e.preventDefault();
-                    showConfirmModal('Are you sure you want to clear all dead-letter DB rows? Quarantined files remain unless deleted individually.', this);
+                    showConfirmModal('Are you sure you want to clear all dead-letter DB rows?', this);
                 });
             }
 
@@ -5839,7 +5838,7 @@ $recent_audit_entries = gb_load_audit_logs($audit_preview_limit, $audit_scope_pa
                 if (!form) return;
                 form.addEventListener('submit', function(e) {
                     e.preventDefault();
-                    showConfirmModal('Delete this dead-letter row and remove its quarantined file (if found)?', this);
+                    showConfirmModal('Delete this dead-letter row?', this);
                 });
             });
 

@@ -92,6 +92,18 @@ def _has_time_elapsed(last_time_iso: Optional[str], now: datetime, interval_mins
     return (now - last_sent_time).total_seconds() >= interval_mins * 60
 
 
+def _broadcast_to_subscribers_with_optional_wait_warning(
+    message: str,
+    subscription_key: str,
+    warn_queue_wait: bool = True,
+) -> None:
+    try:
+        broadcast_to_subscribers(message, subscription_key, warn_queue_wait=warn_queue_wait)
+    except TypeError:
+        # Keeps compatibility with tests/mocks that stub broadcast_to_subscribers(msg, key).
+        broadcast_to_subscribers(message, subscription_key)
+
+
 def handle_new_alert_broadcast() -> None:
     alerts_data = core.load_json(settings.WEATHER_ALERTS_FILE) or []
     current_headlines = {alert.get("headline") for alert in alerts_data if alert.get("headline")}
@@ -111,7 +123,7 @@ def handle_periodic_weather_broadcasts(now: datetime, initial_broadcast: bool = 
         last_sent_iso = core.dispatcher_state.get("last_weather_update")
     should_send_now = False
     if initial_broadcast:
-        should_send_now = True
+        should_send_now = _has_time_elapsed(last_sent_iso, now, settings.WEATHER_UPDATE_INTERVAL_MINS)
     elif now.minute % settings.WEATHER_UPDATE_INTERVAL_MINS == 0:
         last_sent_time = datetime.fromisoformat(last_sent_iso) if last_sent_iso else datetime.min.replace(tzinfo=pytz.UTC)
         if (now - last_sent_time).total_seconds() > 60:
@@ -124,7 +136,11 @@ def handle_periodic_weather_broadcasts(now: datetime, initial_broadcast: bool = 
         if temp_f == "N/A" and humidity == "N/A":
             return
         logging.info("Broadcasting current weather update.")
-        broadcast_to_subscribers(f"{core.PREFIX_WEATHER} Currently: {temp_f}\u00b0F, {humidity}%RH", "weather")
+        _broadcast_to_subscribers_with_optional_wait_warning(
+            f"{core.PREFIX_WEATHER} Currently: {temp_f}\u00b0F, {humidity}%RH",
+            "weather",
+            warn_queue_wait=False,
+        )
         with core.dispatcher_state_lock:
             core.dispatcher_state["last_weather_update"] = now.isoformat()
             core.save_json(settings.DISPATCHER_STATE_FILE, core.dispatcher_state)
@@ -160,7 +176,11 @@ def handle_daily_forecasts(now: datetime) -> None:
             continue
         msg = _create_forecast_message(period)
         full_message = f"{core.PREFIX_FORECAST} {p_name}: {msg}."
-        broadcast_to_subscribers(full_message, "scheduled_daily_forecast")
+        _broadcast_to_subscribers_with_optional_wait_warning(
+            full_message,
+            "scheduled_daily_forecast",
+            warn_queue_wait=False,
+        )
         with core.dispatcher_state_lock:
             core.dispatcher_state[f"forecast_{time_str}_sent_date"] = str(now.date())
             core.save_json(settings.DISPATCHER_STATE_FILE, core.dispatcher_state)

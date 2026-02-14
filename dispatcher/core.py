@@ -3,9 +3,10 @@ import logging
 import os
 import threading
 import time
+from collections import deque
 from contextlib import contextmanager
 from datetime import datetime
-from queue import Queue
+from queue import Empty, Queue
 
 import meshtastic
 import pytz
@@ -13,8 +14,6 @@ from meshtastic.protobuf import config_pb2
 from meshtastic.serial_interface import SerialInterface
 from pubsub import pub
 from tzlocal import get_localzone_name
-from watchdog.events import FileSystemEventHandler
-from watchdog.observers import Observer
 
 import gb_db
 import settings
@@ -47,9 +46,13 @@ BOT_MESSAGE_PREFIXES = (
 )
 
 MAX_LOG_ENTRIES = 200
-COMMAND_COOLDOWN_SECONDS = 3
+COMMAND_COOLDOWN_SECONDS = max(0.0, float(getattr(settings, "COMMAND_COOLDOWN_SECONDS", 1.0)))
 COMMAND_BURST_LIMIT = getattr(settings, "COMMAND_BURST_LIMIT", 8)
 COMMAND_BURST_WINDOW_SECONDS = getattr(settings, "COMMAND_BURST_WINDOW_SECONDS", 30)
+COMMAND_QUEUE_WAIT_WARN_MS = max(1, int(getattr(settings, "COMMAND_QUEUE_WAIT_WARN_MS", 1500)))
+COMMAND_HANDLER_WARN_MS = max(1, int(getattr(settings, "COMMAND_HANDLER_WARN_MS", 2500)))
+SEND_QUEUE_WAIT_WARN_MS = max(1, int(getattr(settings, "SEND_QUEUE_WAIT_WARN_MS", 3000)))
+SEND_EXEC_WARN_MS = max(1, int(getattr(settings, "SEND_EXEC_WARN_MS", 2000)))
 SOS_COMMANDS = ("SOSP", "SOSF", "SOSM", "SOS")
 CLEAR_COMMANDS = {"CLEAR", "CANCEL", "SAFE"}
 ACK_COMMANDS = {"ACK"}
@@ -87,68 +90,16 @@ runtime_last_error = None
 
 # --- Message Sending Queue ---
 send_queue = Queue()
+send_priority_queue = Queue()
 command_queue = Queue()
-MIN_SEND_INTERVAL_SECONDS = 1.1
-
-# --- Watchdog event handler with debouncing ---
-watchdog_event_lock = threading.Lock()
-last_event_times = {}
-DEBOUNCE_SECONDS = 2
-
-
-class MasterFileEventHandler(FileSystemEventHandler):
-    def _handle_path(self, filepath):
-        from .commands import process_command_file
-        from .weather import handle_new_alert_broadcast
-
-        with watchdog_event_lock:
-            if not filepath or not os.path.exists(filepath):
-                return
-
-            command_dir_norm = os.path.normpath(settings.COMMANDS_DIR)
-            filepath_norm = os.path.normpath(filepath)
-            in_commands_dir = filepath_norm.startswith(command_dir_norm + os.sep) or filepath_norm == command_dir_norm
-            is_root_command_file = (
-                in_commands_dir
-                and os.path.normpath(os.path.dirname(filepath_norm)) == command_dir_norm
-                and filepath_norm.endswith(".json")
-            )
-
-            if in_commands_dir and not is_root_command_file:
-                return
-
-            now = time.time()
-            if (now - last_event_times.get(filepath, 0)) < DEBOUNCE_SECONDS:
-                return
-
-            last_event_times[filepath] = now
-            filename = os.path.basename(filepath)
-
-            if is_root_command_file:
-                logging.info(f"Watchdog event (COMMAND) for: {filename}")
-                process_command_file(filepath)
-            elif filename == os.path.basename(settings.SUBSCRIBERS_FILE):
-                logging.info(f"Watchdog event (CONFIG) for: {filename}. Reloading subscribers...")
-                reload_subscribers()
-            elif filename == os.path.basename(settings.WEATHER_ALERTS_FILE):
-                logging.info(f"Watchdog event (ALERT) for: {filename}. Checking for new alerts...")
-                handle_new_alert_broadcast()
-
-    def on_modified(self, event):
-        if event.is_directory:
-            return
-        self._handle_path(event.src_path)
-
-    def on_created(self, event):
-        if event.is_directory:
-            return
-        self._handle_path(event.src_path)
-
-    def on_moved(self, event):
-        if event.is_directory:
-            return
-        self._handle_path(event.dest_path)
-
+MIN_SEND_INTERVAL_SECONDS = max(0.1, float(getattr(settings, "MIN_SEND_INTERVAL_SECONDS", 0.6)))
+latency_metrics_lock = threading.Lock()
+latency_metrics = {
+    "command_queue_wait_ms": deque(maxlen=256),
+    "command_handler_ms": deque(maxlen=256),
+    "send_queue_wait_ms": deque(maxlen=256),
+    "send_exec_ms": deque(maxlen=256),
+}
 
 # --- UTILITY FUNCTIONS ---
 @contextmanager
@@ -187,10 +138,15 @@ def save_json_locked(path, data):
 def reload_subscribers():
     global subscribers
     with subscribers_lock:
+        previous_count = len(subscribers)
         new_subscribers_data = gb_db.load_subscribers_dict() or {}
         subscribers.clear()
         subscribers.update(new_subscribers_data)
-        logging.info(f"Subscribers reloaded successfully. Total: {len(subscribers)}.")
+        current_count = len(subscribers)
+        if current_count != previous_count:
+            logging.info(f"Subscribers reloaded successfully. Total: {current_count}.")
+        else:
+            logging.debug(f"Subscribers reload completed. Total unchanged: {current_count}.")
 
 
 def load_json(path):
@@ -218,6 +174,57 @@ def save_json(path, data):
         os.replace(temp_filepath, path)
     except Exception as e:
         logging.error(f"Error saving JSON to {path}: {e}")
+
+
+def enqueue_command(sender, text, enqueued_at=None):
+    queued_at = float(enqueued_at if enqueued_at is not None else time.time())
+    command_queue.put((sender, text, queued_at))
+
+
+def dequeue_send_job(idle_timeout_seconds=0.25):
+    while True:
+        try:
+            return send_priority_queue.get_nowait()
+        except Empty:
+            pass
+        try:
+            return send_queue.get(timeout=max(0.05, float(idle_timeout_seconds)))
+        except Empty:
+            continue
+
+
+def record_latency_sample(metric_name, value_ms):
+    try:
+        sample = float(value_ms)
+    except (TypeError, ValueError):
+        return
+    if sample < 0:
+        return
+    with latency_metrics_lock:
+        bucket = latency_metrics.get(metric_name)
+        if bucket is not None:
+            bucket.append(sample)
+
+
+def _summarize_latency(samples):
+    count = len(samples)
+    if count <= 0:
+        return {"count": 0, "avg_ms": None, "p95_ms": None, "max_ms": None}
+    ordered = sorted(samples)
+    p95_index = max(0, min(count - 1, int((count - 1) * 0.95)))
+    avg_ms = sum(ordered) / count
+    return {
+        "count": count,
+        "avg_ms": round(avg_ms, 1),
+        "p95_ms": round(ordered[p95_index], 1),
+        "max_ms": round(ordered[-1], 1),
+    }
+
+
+def get_latency_metric_snapshots():
+    with latency_metrics_lock:
+        snapshots = {name: list(values) for name, values in latency_metrics.items()}
+    return {name: _summarize_latency(values) for name, values in snapshots.items()}
 
 
 def get_formatted_timestamp():
@@ -317,40 +324,24 @@ def update_dispatcher_status(now=None):
         except Exception:
             return 0
 
-    def _command_file_backlog_stats():
-        count = 0
-        oldest_age = None
-        commands_dir = os.path.normpath(settings.COMMANDS_DIR)
-        if not os.path.isdir(commands_dir):
-            return count, oldest_age
-        now_ts = int(time.time())
-        with os.scandir(commands_dir) as entries:
-            for entry in entries:
-                if not entry.is_file() or not entry.name.endswith(".json"):
-                    continue
-                count += 1
-                try:
-                    age = now_ts - int(entry.stat().st_mtime)
-                except OSError:
-                    age = None
-                if age is None:
-                    continue
-                if oldest_age is None or age > oldest_age:
-                    oldest_age = age
-        return count, oldest_age
-
     db_size = _safe_file_size(settings.DB_PATH)
     wal_size = _safe_file_size(settings.DB_PATH + "-wal")
     shm_size = _safe_file_size(settings.DB_PATH + "-shm")
     command_job_backlog_count = gb_db.count_command_jobs(statuses=("queued", "running"))
     command_job_oldest_age = gb_db.oldest_command_job_age(statuses=("queued", "running"))
-    command_file_backlog_count, command_file_oldest_age = _command_file_backlog_stats()
-    command_backlog_count = command_job_backlog_count + command_file_backlog_count
-    oldest_candidates = [age for age in [command_job_oldest_age, command_file_oldest_age] if age is not None]
-    oldest_command_age = max(oldest_candidates) if oldest_candidates else None
+    command_backlog_count = command_job_backlog_count
+    oldest_command_age = command_job_oldest_age
     send_queue_depth = _safe_qsize(send_queue)
+    send_priority_queue_depth = _safe_qsize(send_priority_queue)
     command_queue_depth = _safe_qsize(command_queue)
     dead_letter_count = gb_db.count_command_dead_letters()
+    latency = get_latency_metric_snapshots()
+    command_wait_stats = latency.get("command_queue_wait_ms", {})
+    command_handler_stats = latency.get("command_handler_ms", {})
+    send_wait_stats = latency.get("send_queue_wait_ms", {})
+    send_exec_stats = latency.get("send_exec_ms", {})
+    subscribers_count = gb_db.count_subscribers()
+    active_sos_count = gb_db.count_active_sos_logs()
 
     dispatcher_state_age = None
     if os.path.exists(settings.DISPATCHER_STATE_FILE):
@@ -400,7 +391,7 @@ def update_dispatcher_status(now=None):
             {
                 "level": "warn",
                 "code": "command_dead_letters_present",
-                "message": f"{dead_letter_count} command file(s) are in dead-letter state.",
+                "message": f"{dead_letter_count} command(s) are in dead-letter state.",
             }
         )
     if send_queue_depth >= 60:
@@ -411,12 +402,52 @@ def update_dispatcher_status(now=None):
                 "message": f"Send queue depth is {send_queue_depth}.",
             }
         )
+    if send_priority_queue_depth >= 20:
+        alerts.append(
+            {
+                "level": "warn",
+                "code": "send_priority_queue_depth_high",
+                "message": f"Priority send queue depth is {send_priority_queue_depth}.",
+            }
+        )
     if command_queue_depth >= 60:
         alerts.append(
             {
                 "level": "warn",
                 "code": "command_queue_depth_high",
                 "message": f"Command worker queue depth is {command_queue_depth}.",
+            }
+        )
+    if (command_wait_stats.get("p95_ms") or 0) >= COMMAND_QUEUE_WAIT_WARN_MS:
+        alerts.append(
+            {
+                "level": "warn",
+                "code": "command_queue_wait_high",
+                "message": f"Command queue wait p95 is {command_wait_stats.get('p95_ms')}ms.",
+            }
+        )
+    if (command_handler_stats.get("p95_ms") or 0) >= COMMAND_HANDLER_WARN_MS:
+        alerts.append(
+            {
+                "level": "warn",
+                "code": "command_handler_slow",
+                "message": f"Command handler p95 is {command_handler_stats.get('p95_ms')}ms.",
+            }
+        )
+    if (send_wait_stats.get("p95_ms") or 0) >= SEND_QUEUE_WAIT_WARN_MS:
+        alerts.append(
+            {
+                "level": "warn",
+                "code": "send_queue_wait_high",
+                "message": f"Send queue wait p95 is {send_wait_stats.get('p95_ms')}ms.",
+            }
+        )
+    if (send_exec_stats.get("p95_ms") or 0) >= SEND_EXEC_WARN_MS:
+        alerts.append(
+            {
+                "level": "warn",
+                "code": "send_exec_slow",
+                "message": f"Send execution p95 is {send_exec_stats.get('p95_ms')}ms.",
             }
         )
     if isinstance(last_error, dict):
@@ -445,18 +476,21 @@ def update_dispatcher_status(now=None):
             "db_total_bytes": db_size + wal_size + shm_size,
             "outgoing_email_queue": gb_db.count_outgoing_emails(),
             "failed_dm_queue": gb_db.count_failed_dm_queue(),
-            "subscribers_count": len(gb_db.load_subscribers_dict() or {}),
-            "active_sos_count": len(gb_db.load_active_sos_logs() or []),
+            "subscribers_count": subscribers_count,
+            "active_sos_count": active_sos_count,
             "dispatcher_state_age_seconds": dispatcher_state_age,
             "command_backlog_count": command_backlog_count,
             "command_oldest_age_seconds": oldest_command_age,
             "command_job_backlog_count": command_job_backlog_count,
             "command_job_oldest_age_seconds": command_job_oldest_age,
-            "command_file_backlog_count": command_file_backlog_count,
-            "command_file_oldest_age_seconds": command_file_oldest_age,
             "send_queue_depth": send_queue_depth,
+            "send_priority_queue_depth": send_priority_queue_depth,
             "command_queue_depth": command_queue_depth,
             "command_dead_letter_count": dead_letter_count,
+            "command_queue_wait_ms": command_wait_stats,
+            "command_handler_ms": command_handler_stats,
+            "send_queue_wait_ms": send_wait_stats,
+            "send_exec_ms": send_exec_stats,
         },
     }
     save_json(settings.DISPATCHER_STATUS_FILE, status_data)
@@ -505,7 +539,7 @@ def run_periodic_task(target_func, interval_seconds, name):
 
 def main():
     global iface, subscribers, dispatcher_state, gateway_node_id, broadcasted_alert_headlines
-    from .commands import command_processor_worker, handle_preexisting_commands, handle_temp_group_expiry, process_command_jobs
+    from .commands import command_processor_worker, handle_temp_group_expiry, process_command_jobs
     from .messaging import broadcast_to_subscribers, on_meshtastic_message, sender_thread_worker
     from .sos import handle_active_sos_tasks
     from .weather import (
@@ -516,7 +550,6 @@ def main():
         handle_periodic_weather_broadcasts,
     )
 
-    observer = Observer()
     try:
         gb_db.ensure_db()
         iface = SerialInterface()
@@ -548,13 +581,6 @@ def main():
     else:
         logging.info("No active NWS alerts found on startup.")
 
-    handle_preexisting_commands()
-
-    event_handler = MasterFileEventHandler()
-    observer.schedule(event_handler, settings.DATA_DIR, recursive=True)
-    observer.start()
-    logging.info(f"Started watching directory for changes: {settings.DATA_DIR}")
-
     now = datetime.now(local_tz)
     logging.info("Performing initial broadcast of weather conditions...")
     handle_periodic_weather_broadcasts(now, initial_broadcast=True)
@@ -567,7 +593,7 @@ def main():
     command_processor_thread.start()
 
     auto_backup_interval_seconds = max(0, int(getattr(settings, "AUTO_BACKUP_INTERVAL_HOURS", 6))) * 3600
-    command_job_poll_seconds = max(1, int(getattr(settings, "COMMAND_JOB_POLL_SECONDS", 1)))
+    command_job_poll_seconds = max(0.1, float(getattr(settings, "COMMAND_JOB_POLL_SECONDS", 0.5)))
     command_job_batch_size = max(1, int(getattr(settings, "COMMAND_JOB_BATCH_SIZE", 20)))
     tasks = [
         threading.Thread(
@@ -627,10 +653,8 @@ def main():
     except KeyboardInterrupt:
         logging.info("KeyboardInterrupt detected. Shutting down...")
     finally:
-        logging.info("Stopping observer thread.")
-        observer.stop()
-        observer.join()
-        command_queue.put((None, None))
+        enqueue_command(None, None)
+        send_priority_queue.put(None)
         send_queue.put(None)
         iface_ref = iface
         iface = None

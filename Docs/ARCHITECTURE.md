@@ -7,7 +7,7 @@ GuardianBridge is split into a core dispatcher package and supporting scripts. T
 ## Module Map
 
 `dispatcher/core.py`
-- Main entrypoint, global state, watchdog, periodic tasks, and status updates.
+- Main entrypoint, global state, periodic tasks, and status updates.
 
 `dispatcher/commands.py`
 - Command parsing and user/admin command handlers.
@@ -49,7 +49,7 @@ SQLite is used for high-traffic data in `data/guardianbridge.db`:
 - `outgoing_emails_quarantine` (JSON per row, pruned by retention limit)
 - `failed_dm_queue` (JSON per row)
 
-Legacy JSON files are auto-migrated on first run and treated as read-only. JSON remains in use for caches like `dispatcher_state.json`, `weather_*.json`, and `nws_alerts.json`.
+JSON remains in use for caches like `dispatcher_state.json`, `weather_*.json`, and `nws_alerts.json`.
 
 ## Normalization Roadmap (Optional v1.4+)
 

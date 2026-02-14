@@ -76,26 +76,6 @@ def _install_stubs():
     pubsub.pub = DummyPub()
     _install_stub("pubsub", pubsub)
 
-    watchdog = types.ModuleType("watchdog")
-    watchdog_observers = types.ModuleType("watchdog.observers")
-    watchdog_events = types.ModuleType("watchdog.events")
-    class DummyObserver:
-        def schedule(self, *args, **kwargs):
-            return None
-        def start(self):
-            return None
-        def stop(self):
-            return None
-        def join(self):
-            return None
-    class DummyEventHandler:
-        pass
-    watchdog_observers.Observer = DummyObserver
-    watchdog_events.FileSystemEventHandler = DummyEventHandler
-    _install_stub("watchdog", watchdog)
-    _install_stub("watchdog.observers", watchdog_observers)
-    _install_stub("watchdog.events", watchdog_events)
-
 
 def _import_messaging():
     _install_stubs()

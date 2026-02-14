@@ -17,7 +17,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-// GuardianBridge - api_get_nodes.php (v1.3.0)
+// GuardianBridge - api_get_nodes.php (v1.4.0)
 
 header('Content-Type: application/json');
 require_once __DIR__ . '/../db.php';

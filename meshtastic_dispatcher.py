@@ -14,10 +14,10 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-"""Legacy entrypoint for the GuardianBridge dispatcher."""
+"""Entrypoint for the GuardianBridge dispatcher."""
 
-import gb_db  # re-exported for compatibility
-import settings  # re-exported for compatibility
+import gb_db
+import settings
 
 from dispatcher import core as core
 import dispatcher.commands as commands

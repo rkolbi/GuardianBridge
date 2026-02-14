@@ -5,10 +5,6 @@ function gb_db_path() {
     return '/opt/GuardianBridge/data/guardianbridge.db';
 }
 
-function gb_json_path($name) {
-    return '/opt/GuardianBridge/data/' . $name;
-}
-
 function gb_db() {
     static $pdo = null;
     if ($pdo instanceof PDO) {
@@ -22,7 +18,6 @@ function gb_db() {
     $pdo->exec('PRAGMA busy_timeout=5000;');
     $pdo->exec('PRAGMA foreign_keys=ON;');
     gb_init_db($pdo);
-    gb_migrate_from_json($pdo);
     return $pdo;
 }
 
@@ -64,85 +59,6 @@ function gb_init_db(PDO $pdo) {
     }
     if (!isset($col_names['locked'])) {
         $pdo->exec('ALTER TABLE temp_groups ADD COLUMN locked INTEGER NOT NULL DEFAULT 0');
-    }
-}
-
-function gb_table_has_rows(PDO $pdo, $table) {
-    $stmt = $pdo->query("SELECT 1 FROM {$table} LIMIT 1");
-    return $stmt->fetchColumn() !== false;
-}
-
-function gb_read_json($path) {
-    if (!is_readable($path)) { return null; }
-    $content = file_get_contents($path);
-    if ($content === false || trim($content) === '') { return null; }
-    $decoded = json_decode($content, true);
-    return (json_last_error() === JSON_ERROR_NONE) ? $decoded : null;
-}
-
-function gb_migrate_from_json(PDO $pdo) {
-    if (!gb_table_has_rows($pdo, 'subscribers')) {
-        $data = gb_read_json(gb_json_path('subscribers.json')) ?? [];
-        $now = time();
-        $stmt = $pdo->prepare('INSERT OR REPLACE INTO subscribers (node_id, data_json, updated_at) VALUES (?, ?, ?)');
-        foreach ($data as $node_id => $sub) {
-            $stmt->execute([$node_id, json_encode($sub), $now]);
-        }
-    }
-
-    if (!gb_table_has_rows($pdo, 'node_status')) {
-        $data = gb_read_json(gb_json_path('node_status.json')) ?? [];
-        $now = time();
-        $stmt = $pdo->prepare('INSERT OR REPLACE INTO node_status (node_id, data_json, updated_at) VALUES (?, ?, ?)');
-        foreach ($data as $node_id => $status) {
-            $stmt->execute([$node_id, json_encode($status), $now]);
-        }
-    }
-
-    if (!gb_table_has_rows($pdo, 'chat_log')) {
-        $data = gb_read_json(gb_json_path('channel0_log.json')) ?? [];
-        $now = time();
-        $stmt = $pdo->prepare('INSERT INTO chat_log (data_json, created_at) VALUES (?, ?)');
-        foreach ($data as $entry) {
-            $stmt->execute([json_encode($entry), $now]);
-        }
-    }
-
-    if (!gb_table_has_rows($pdo, 'sos_log')) {
-        $data = gb_read_json(gb_json_path('sos_log.json')) ?? [];
-        $now = time();
-        $stmt = $pdo->prepare('INSERT INTO sos_log (data_json, created_at, active) VALUES (?, ?, ?)');
-        foreach ($data as $entry) {
-            $active = !empty($entry['active']) ? 1 : 0;
-            $stmt->execute([json_encode($entry), $now, $active]);
-        }
-    }
-
-    if (!gb_table_has_rows($pdo, 'dispatcher_jobs')) {
-        $data = gb_read_json(gb_json_path('dispatcher_jobs.json')) ?? [];
-        $now = time();
-        $stmt = $pdo->prepare('INSERT INTO dispatcher_jobs (position, data_json, updated_at) VALUES (?, ?, ?)');
-        foreach ($data as $position => $job) {
-            $stmt->execute([intval($position), json_encode($job), $now]);
-        }
-    }
-
-    if (!gb_table_has_rows($pdo, 'outgoing_emails')) {
-        $data = gb_read_json(gb_json_path('outgoing_emails.json')) ?? [];
-        $now = time();
-        $stmt = $pdo->prepare('INSERT INTO outgoing_emails (data_json, created_at) VALUES (?, ?)');
-        foreach ($data as $entry) {
-            $stmt->execute([json_encode($entry), $now]);
-        }
-    }
-
-    if (!gb_table_has_rows($pdo, 'failed_dm_queue')) {
-        $data = gb_read_json(gb_json_path('failed_dm_queue.json')) ?? [];
-        $now = time();
-        $stmt = $pdo->prepare('INSERT INTO failed_dm_queue (data_json, created_at) VALUES (?, ?)');
-        foreach ($data as $entry) {
-            $stmt->execute([json_encode($entry), $now]);
-        }
     }
 }
 
@@ -478,21 +394,6 @@ function gb_clear_command_dead_letters() {
     $pdo->exec('DELETE FROM command_dead_letters');
 }
 
-function gb_sanitize_dead_letter_name($value, $fallback = 'command.json') {
-    $name = basename(trim((string)$value));
-    if ($name === '' || $name === '.' || $name === '..') {
-        $name = $fallback;
-    }
-    $safe = preg_replace('/[^A-Za-z0-9._-]/', '_', $name);
-    if (!is_string($safe) || $safe === '') {
-        $safe = $fallback;
-    }
-    if (!preg_match('/\.json$/i', $safe)) {
-        $safe .= '.json';
-    }
-    return $safe;
-}
-
 function gb_random_hex($bytes = 3) {
     $len = max(1, intval($bytes));
     try {
@@ -569,99 +470,19 @@ function gb_enqueue_command_job(array $command_data, $source_file = 'webui', $co
     }
 }
 
-function gb_find_dead_letter_quarantine_file($error_dir, array $dead_letter) {
-    $details = is_array($dead_letter['details'] ?? null) ? $dead_letter['details'] : [];
-    $source_file = gb_sanitize_dead_letter_name($dead_letter['source_file'] ?? ('dead_letter_' . intval($dead_letter['id'] ?? 0) . '.json'));
-
-    $candidates = [];
-    $detail_quarantined = trim((string)($details['quarantined_file'] ?? ''));
-    if ($detail_quarantined !== '') {
-        $detail_base = basename($detail_quarantined);
-        $candidate = rtrim($error_dir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $detail_base;
-        if (is_file($candidate) && is_readable($candidate)) {
-            $candidates[] = $candidate;
-        }
-    }
-
-    $meta_files = glob(rtrim($error_dir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . '*.meta.json');
-    if (is_array($meta_files)) {
-        foreach ($meta_files as $meta_path) {
-            $meta_raw = @file_get_contents($meta_path);
-            if ($meta_raw === false || trim($meta_raw) === '') {
-                continue;
-            }
-            $meta = json_decode($meta_raw, true);
-            if (!is_array($meta)) {
-                continue;
-            }
-            $meta_command_id = trim((string)($meta['command_id'] ?? ''));
-            $meta_source = gb_sanitize_dead_letter_name((string)($meta['source_file'] ?? ''));
-            if (
-                $meta_command_id !== '' &&
-                $meta_command_id === trim((string)($dead_letter['command_id'] ?? '')) &&
-                $meta_source === $source_file
-            ) {
-                $candidate = substr($meta_path, 0, -9);
-                if (is_file($candidate) && is_readable($candidate)) {
-                    $candidates[] = $candidate;
-                }
-            }
-        }
-    }
-
-    $glob_matches = glob(rtrim($error_dir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . '*_' . $source_file);
-    if (is_array($glob_matches)) {
-        foreach ($glob_matches as $candidate) {
-            if (substr($candidate, -9) === '.meta.json') {
-                continue;
-            }
-            if (is_file($candidate) && is_readable($candidate)) {
-                $candidates[] = $candidate;
-            }
-        }
-    }
-
-    if (empty($candidates)) {
-        return null;
-    }
-
-    $candidates = array_values(array_unique($candidates));
-    usort($candidates, function ($a, $b) {
-        $ma = @filemtime($a) ?: 0;
-        $mb = @filemtime($b) ?: 0;
-        return $mb <=> $ma;
-    });
-    return $candidates[0];
-}
-
-function gb_requeue_command_dead_letter($id, $commands_dir, &$result = null) {
+function gb_requeue_command_dead_letter($id, &$result = null) {
     $dead_letter = gb_get_command_dead_letter($id);
     if (!$dead_letter) {
         $result = ['error' => 'Dead-letter row not found.'];
         return false;
     }
 
-    $commands_dir = rtrim((string)$commands_dir, DIRECTORY_SEPARATOR);
-    $error_dir = $commands_dir . DIRECTORY_SEPARATOR . 'error';
     $payload = null;
-    $quarantined_path = gb_find_dead_letter_quarantine_file($error_dir, $dead_letter);
-    if ($quarantined_path && is_readable($quarantined_path)) {
-        $raw = @file_get_contents($quarantined_path);
-        if (is_string($raw) && trim($raw) !== '') {
-            $decoded = json_decode($raw, true);
-            if (is_array($decoded)) {
-                $payload = $decoded;
-            }
-        }
-    }
+    $details = is_array($dead_letter['details'] ?? null) ? $dead_letter['details'] : [];
+    $payload = $details['payload'] ?? null;
 
     if (!is_array($payload)) {
-        $details = is_array($dead_letter['details'] ?? null) ? $dead_letter['details'] : [];
-        $payload = $details['payload'] ?? null;
-    }
-
-    if (!is_array($payload)) {
-        $result = ['error' => 'Unable to requeue: no valid command payload found in dead-letter record or quarantine file.'];
+        $result = ['error' => 'Unable to requeue: no valid command payload found in dead-letter record.'];
         return false;
     }
 
@@ -673,10 +494,6 @@ function gb_requeue_command_dead_letter($id, $commands_dir, &$result = null) {
     }
 
     gb_delete_command_dead_letter(intval($dead_letter['id']));
-    if ($quarantined_path) {
-        @unlink($quarantined_path);
-        @unlink($quarantined_path . '.meta.json');
-    }
 
     $result = [
         'queued_file' => 'db_job_' . intval($queue_result['job_id'] ?? 0),
@@ -686,27 +503,18 @@ function gb_requeue_command_dead_letter($id, $commands_dir, &$result = null) {
     return true;
 }
 
-function gb_delete_command_dead_letter_with_file($id, $commands_dir, &$result = null) {
+function gb_delete_command_dead_letter_with_file($id, &$result = null) {
     $dead_letter = gb_get_command_dead_letter($id);
     if (!$dead_letter) {
         $result = ['error' => 'Dead-letter row not found.'];
         return false;
     }
-    $commands_dir = rtrim((string)$commands_dir, DIRECTORY_SEPARATOR);
-    $error_dir = $commands_dir . DIRECTORY_SEPARATOR . 'error';
-    $quarantined_path = gb_find_dead_letter_quarantine_file($error_dir, $dead_letter);
 
     gb_delete_command_dead_letter(intval($dead_letter['id']));
-
-    if ($quarantined_path) {
-        @unlink($quarantined_path);
-        @unlink($quarantined_path . '.meta.json');
-    }
 
     $result = [
         'source_file' => $dead_letter['source_file'],
         'command_id' => $dead_letter['command_id'],
-        'file_removed' => $quarantined_path ? true : false,
     ];
     return true;
 }

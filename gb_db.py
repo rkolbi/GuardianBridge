@@ -15,7 +15,6 @@ _initialized = False
 def _get_conn():
     conn = sqlite3.connect(settings.DB_PATH, timeout=5, check_same_thread=False)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
     conn.execute("PRAGMA foreign_keys=ON")
     return conn
@@ -37,6 +36,7 @@ def _conn():
 def init_db():
     os.makedirs(os.path.dirname(settings.DB_PATH), exist_ok=True)
     with _conn() as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS subscribers (
@@ -180,88 +180,6 @@ def init_db():
             conn.execute("ALTER TABLE temp_groups ADD COLUMN locked INTEGER NOT NULL DEFAULT 0")
 
 
-def _table_has_rows(conn, table_name):
-    row = conn.execute(f"SELECT 1 FROM {table_name} LIMIT 1").fetchone()
-    return row is not None
-
-
-def _load_json(path):
-    if not os.path.exists(path):
-        return None
-    try:
-        with open(path, "r") as f:
-            return json.load(f)
-    except Exception:
-        return None
-
-
-def migrate_from_json():
-    with _conn() as conn:
-        if not _table_has_rows(conn, "subscribers"):
-            data = _load_json(settings.SUBSCRIBERS_FILE) or {}
-            now = int(time.time())
-            for node_id, sub in data.items():
-                conn.execute(
-                    "INSERT OR REPLACE INTO subscribers (node_id, data_json, updated_at) VALUES (?, ?, ?)",
-                    (node_id, json.dumps(sub), now),
-                )
-
-        if not _table_has_rows(conn, "node_status"):
-            data = _load_json(settings.NODE_STATUS_FILE) or {}
-            now = int(time.time())
-            for node_id, status in data.items():
-                conn.execute(
-                    "INSERT OR REPLACE INTO node_status (node_id, data_json, updated_at) VALUES (?, ?, ?)",
-                    (node_id, json.dumps(status), now),
-                )
-
-        if not _table_has_rows(conn, "chat_log"):
-            data = _load_json(getattr(settings, "CHANNEL0_LOG_FILE", "")) or []
-            now = int(time.time())
-            for entry in data:
-                conn.execute(
-                    "INSERT INTO chat_log (data_json, created_at) VALUES (?, ?)",
-                    (json.dumps(entry), now),
-                )
-
-        if not _table_has_rows(conn, "sos_log"):
-            data = _load_json(settings.SOS_LOG_FILE) or []
-            now = int(time.time())
-            for entry in data:
-                active = 1 if entry.get("active") else 0
-                conn.execute(
-                    "INSERT INTO sos_log (data_json, created_at, active) VALUES (?, ?, ?)",
-                    (json.dumps(entry), now, active),
-                )
-
-        if not _table_has_rows(conn, "dispatcher_jobs"):
-            data = _load_json(settings.DISPATCHER_JOBS_FILE) or []
-            now = int(time.time())
-            for position, job in enumerate(data):
-                conn.execute(
-                    "INSERT INTO dispatcher_jobs (position, data_json, updated_at) VALUES (?, ?, ?)",
-                    (position, json.dumps(job), now),
-                )
-
-        if not _table_has_rows(conn, "outgoing_emails"):
-            data = _load_json(settings.OUTGOING_EMAIL_FILE) or []
-            now = int(time.time())
-            for entry in data:
-                conn.execute(
-                    "INSERT INTO outgoing_emails (data_json, created_at) VALUES (?, ?)",
-                    (json.dumps(entry), now),
-                )
-
-        if not _table_has_rows(conn, "failed_dm_queue"):
-            data = _load_json(settings.FAILED_DM_QUEUE_FILE) or []
-            now = int(time.time())
-            for entry in data:
-                conn.execute(
-                    "INSERT INTO failed_dm_queue (data_json, created_at) VALUES (?, ?)",
-                    (json.dumps(entry), now),
-                )
-
-
 def ensure_db():
     global _initialized
     if _initialized:
@@ -270,7 +188,6 @@ def ensure_db():
         if _initialized:
             return
         init_db()
-        migrate_from_json()
         _initialized = True
 
 
@@ -285,6 +202,33 @@ def load_subscribers_dict():
         except Exception:
             data[row["node_id"]] = {}
     return data
+
+
+def get_subscriber(node_id, case_insensitive=False):
+    ensure_db()
+    node_key = str(node_id or "").strip()
+    if not node_key:
+        return None
+    query = "SELECT data_json FROM subscribers WHERE node_id = ? LIMIT 1"
+    params = (node_key,)
+    if case_insensitive:
+        query = "SELECT data_json FROM subscribers WHERE node_id = ? COLLATE NOCASE LIMIT 1"
+    with _conn() as conn:
+        row = conn.execute(query, params).fetchone()
+    if not row:
+        return None
+    try:
+        data = json.loads(row["data_json"])
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def count_subscribers():
+    ensure_db()
+    with _conn() as conn:
+        row = conn.execute("SELECT COUNT(1) AS cnt FROM subscribers").fetchone()
+    return int((row["cnt"] if row else 0) or 0)
 
 
 def upsert_subscriber(node_id, data):
@@ -379,20 +323,23 @@ def replace_node_statuses(data):
 def append_chat_log(entry, max_entries=200):
     ensure_db()
     with _conn() as conn:
-        conn.execute(
+        cur = conn.execute(
             "INSERT INTO chat_log (data_json, created_at) VALUES (?, ?)",
             (json.dumps(entry), int(time.time())),
         )
         if max_entries:
-            conn.execute(
-                """
-                DELETE FROM chat_log
-                WHERE id NOT IN (
-                    SELECT id FROM chat_log ORDER BY id DESC LIMIT ?
-                )
-                """,
-                (max_entries,),
-            )
+            max_rows = max(1, int(max_entries))
+            newest_id = int(cur.lastrowid or 0)
+            cutoff_id = newest_id - max_rows
+            if cutoff_id > 0:
+                conn.execute("DELETE FROM chat_log WHERE id <= ?", (cutoff_id,))
+
+
+def count_active_sos_logs():
+    ensure_db()
+    with _conn() as conn:
+        row = conn.execute("SELECT COUNT(1) AS cnt FROM sos_log WHERE active = 1").fetchone()
+    return int((row["cnt"] if row else 0) or 0)
 
 
 def get_chat_logs(after_id=0, limit=200):
