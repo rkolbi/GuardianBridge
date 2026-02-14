@@ -8,99 +8,19 @@ It acts as a resilient communication hub, ensuring that even when all other syst
 
 ## Table of Contents
 
-  * 1.  What's New in GuardianBridge
-  * 1.  What is GuardianBridge?
-  * 2.  System Philosophy
-  * 3.  Core Capabilities
-  * 4.  Functionality Deep-Dive
-  * 5.  The Admin & Operator Panels
-  * 6.  Installation & Setup
-  * 7.  User & Admin Guides
-  * 8.  System Architecture
-  * 9.  File Structure
-  * 10. Troubleshooting
-  * 11. Project Roadmap
+  1. What is GuardianBridge?
+  2. System Philosophy
+  3. Core Capabilities
+  4. Functionality Deep-Dive
+  5. The Admin & Operator Panels
+  6. Installation & Setup
+  7. User & Admin Guides
+  8. System Architecture
+  9. File Structure
+  10. Troubleshooting
+  11. Project Roadmap
 
-## 1. What's New in GuardianBridge
 
-### **GuardianBridge v1.4 "Dispatch"**
-This release standardizes the backend on SQLite for a self-contained local database and simpler deployments.
-
-This update transforms the SOS system into a true multi-incident command platform, giving administrators, responders, and users the tools they need to manage chaos with clarity.
-
-This release focuses on three core areas: providing peace of mind for those in distress, empowering responders with advanced coordination tools, and giving administrators situational awareness.
-
-#### **1. For You and Your Family: A Personalized Safety Net**
-In an emergency, knowing you've been heard and that help is on the way is everything. These features are designed to provide that peace of mind.
-* **Immediate Confirmation & Updates:** The moment you send an SOS, the system confirms it has been received. As responders begin to move, you'll get real-time updates with a growing list of names, so you know exactly who is coming to help.
-* **New Profile Fields for Critical Info:** In the Admin Panel, you can now add two new crucial pieces of information to your user profile:
-    * **Emergency Point of Contact / Next of Kin:** A dedicated field to store information for responders, such as a spouse's contact info, a neighbor's name, or critical medical notes.
-    * **SOS Notify List:** This powerful new field allows you to create a custom notification list. You can add a comma-separated list of **email addresses, node IDs, or GuardianBridge usernames**. When you trigger an SOS, the system will send the full alert not only to the official tagged responders but also to every contact on your personal list, ensuring your family and friends are immediately notified.
-
-#### **2. For Responders: A Conversational Interface for a Crisis**
-What happens when you send `RESPONDING` and there are three active emergencies? The gateway will now ask you which one you're heading to.
-1.  **Step 1:** You send `RESPONDING` as a Direct Message to the gateway.
-2.  **Step 2:** The gateway instantly replies with a numbered list of active incidents:
-    ```
-    Multiple active alerts. Reply with command and number (e.g., ACK 2):
-    1. SOSM from Alice
-    2. SOSF from David
-    ```
-3.  **Step 3:** You commit to a specific incident by replying with the command and number: `RESPONDING 1`.
-
-The system then logs you as responding to Alice's alert, notifies the admin, and updates all other responders. This simple, conversational system makes it easy to coordinate even when the situation is complex.
-
-#### **3. For Administrators: The Incident Command Dashboard**
-Your "Live Node List" is no longer just a list; during a crisis, it becomes a true **Incident Command Dashboard**.
-
-When multiple SOS alerts are active, the list automatically reorganizes itself, grouping responders and acknowledgers directly under the specific incident they've committed to. This provides an instant, at-a-glance "order of battle" for the entire situation.
-* **SOS Sender 1 (Alice)** - Highlighted in Red
-    * *SOS Message: "Need medical assistance for injured dog"*
-    * **Bob (Responding)** - Highlighted in Green
-    * **Charlie (Acknowledged)** - Highlighted in Yellow
-* **SOS Sender 2 (David)** - Highlighted in Red
-    * *SOS Message: "Smoke visible from my location"*
-* **Other Network Nodes...**
-
-This hierarchical view gives you immediate, critical situational awareness, allowing you to see which incidents are being handled and which still need resources.
-
----
-
-### **GuardianBridge v1.2 "Lifeline Lookout"**
-This major update transformed our SOS system into a more responsive, semi-automated emergency communication platform built to keep communities connected when it matters most.
-
-#### **1. For the Person in Distress: Peace of Mind in Seconds**
-In an emergency, the scariest moment is wondering if your call for help even got through. Lifeline Lookout removes that uncertainty:
-* **Instant Confirmation:** The moment you send an SOS, the system alerts your response team *and* sends you an immediate confirmation:
-    ```
-    BOT: Your SOSM has been received. Alerting assigned personnel.
-    ```
-    Now you know for sure that help is on the way.
-* **Multi-Responder Updates:** Emergencies often require more than one responder. As each team member sends `RESPONDING`, you see a running list of names:
-    * *First responder:* `BOT: Help is on the way. Alice is responding to your alert.`
-    * *Second responder:* `BOT: Help is on the way. Alice and Bob are now responding to your alert.`
-* **SOS with Context:** A message is good. A message with context saves lives. Add a short note to your SOS - for example:
-    ```
-    SOSM Need medical assistance for injured dog
-    ```
-    Responders see this first, giving them vital information before they arrive.
-
-#### **2. For Responders & Admins: Clear, Coordinated Response**
-To prevent confusion and overlap, Lifeline Lookout adds new tools for response teams:
-* **Team-Based Response:** Multiple responders can now send `RESPONDING`, with each update shared to all team members so everyone knows who's on the way.
-* **Incident Command Dashboard:** In the Admin Panel, the "Live Node List" now transforms during an SOS:
-    * SOS sender: Top of the list, in red
-    * Responders: Grouped below, in green
-    * Acknowledged-but-not-responding members: Grouped in yellow
-
-This gives admins a clear, real-time view of the entire situation.
-
-#### **3. For System Resilience: Built-In Safety Nets**
-Emergencies can escalate quickly. Lifeline Lookout includes features to keep help moving even when things go wrong:
-* **Active Check-In (Dead Man's Switch):** The system periodically pings the person in distress. If there's no response after multiple attempts, it automatically escalates the alert with an **UNRESPONSIVE** status for all responders.
-* **No-Response Escalation:** If no tagged responders acknowledge an alert within a set time, the system automatically rebroadcasts the SOS to the entire network, ensuring no one is left behind.
-
----
 
 ## 1\. What is GuardianBridge?
 
@@ -138,6 +58,8 @@ GuardianBridge provides a rich set of automated and on-demand features to keep y
   * **Operator/Admin Audit Trail**: High-impact web actions are recorded in an SQLite-backed audit log (actor, panel, action, target, timestamp, and details), shown in MAP/MOP with role-scoped visibility, exportable as JSON/CSV, and bounded by retention controls.
   * **User Self-Service**: Users can subscribe, unsubscribe, register a name, and toggle individual broadcast types using simple direct messages to the gateway.
   * **SOS Emergency Alert System**: Users can trigger an alert (general, police, fire, medical) and admins can manage the response, including remote clearance.
+  * **Multi-Incident SOS Coordination**: When multiple incidents are active, responders can disambiguate with numbered `ACK`/`RESPONDING` commands (for example, `RESPONDING 2`) and MAP/MOP group responders under the selected incident for clear command visibility.
+  * **Personalized SOS Profiles**: Subscriber records support emergency point-of-contact/next-of-kin details and an SOS notify list (email addresses, node IDs, or usernames) to fan out alerts to trusted contacts.
   * **Satellite-Resilient**: When the gateway server is connected to a satellite internet provider like Starlink, it remains resilient to local terrestrial infrastructure damage, as satellite internet often stays online when cable and cellular go dark.
 
 ## 4\. Functionality Deep-Dive
@@ -175,6 +97,10 @@ A comprehensive SOS system allows users to signal for help and administrators to
 
   * **User Commands**: Users trigger alerts by sending `SOS` (general), `SOSP` (police), `SOSF` (fire), or `SOSM` (medical) as a Direct Message to the gateway. To cancel, they send `CLEAR`, `CANCEL`, or `SAFE`.
   * **Backend Automation**: Upon receiving an SOS, the `meshtastic_dispatcher.py` immediately requests a fresh location update from the user's node. The event is logged in the `sos_log` table inside `guardianbridge.db` (SQLite) for persistent record-keeping. The alert is relayed as a high-priority DM to subscribed users with corresponding "responder" tags, including the sender's name and last known location with a map link.
+  * **Immediate Sender Feedback**: The sender receives instant confirmation that their SOS was received, then follow-up updates as acknowledgers/responders join the incident.
+  * **Multi-Incident Responder Selection**: If multiple alerts are active and a responder sends `ACK` or `RESPONDING` without a number, the gateway returns a numbered incident list and accepts `ACK <n>` / `RESPONDING <n>` to bind the responder to a specific incident.
+  * **Escalation Safety Nets**: Active check-in logic can escalate incidents to **UNRESPONSIVE** if the sender stops responding, and no-response escalation can rebroadcast alerts if tagged responders do not acknowledge in time.
+  * **Personal Notify Fan-Out**: Each user can define an SOS notify list (emails, node IDs, usernames) that receives their SOS in addition to official responder tags.
   * **Active Status**: A user's active SOS status is recorded in the `node_status` table inside `guardianbridge.db`, persisting even if the node goes offline.
   * **Admin Clearance**: Administrators can remotely clear an active SOS using the "Admin Clear SOS" button in the web UI. This sends a "STAND DOWN" message to responders and clears the SOS status.
 
@@ -190,7 +116,7 @@ GuardianBridge ships with two complementary web UIs:
   * **Chat Tab**: Provides a real-time interface for monitoring and participating in mesh network conversations. It uses event-stream updates first and falls back to interval polling (`CHAT_POLLING_INTERVAL_MS`) when needed. You can broadcast messages to the main channel or send Direct Messages (DMs) to a specific user. Filters allow you to selectively show or hide Direct Messages and system-generated server messages. Clicking a user's Node ID opens a dedicated DM chat modal for private conversations.
   * **Actions Tab**: Allows you to perform manual tasks like forcing an immediate weather fetch or email processing cycle. You can view and clear the outgoing email queue, inspect/export the outgoing email quarantine, view the failed direct message queue, and manage command dead-letters (requeue or delete rows). A new "SOS Alert Log" displays a full history of all received SOS alerts. The Actions tab also shows a recent audit activity feed with JSON/CSV export controls.
   * **Broadcasts Tab**: A powerful interface for managing custom, automated messages. You can create recurring jobs (e.g., a "Good Morning" message every weekday) or one-time announcements for a specific date and time range.
-  * **Users Tab**: Provides full control over subscribers. You can edit user names, full names, phone numbers, email, addresses, and notes. You can also set **address latitude/longitude** and enable **"Use address coordinates for map display"** for that user. Subscriptions (alerts, weather, forecast) and advanced permissions (email send/receive/broadcast, node tag send) are managed here. You can manage assigned tags and set a "blocked" status to ignore all commands from a specific user. The tab displays both the assigned role and the live reported role from the node's radio, highlighting discrepancies.
+  * **Users Tab**: Provides full control over subscribers. You can edit user names, full names, phone numbers, email, addresses, notes, emergency point-of-contact/next-of-kin details, and SOS notify lists. You can also set **address latitude/longitude** and enable **"Use address coordinates for map display"** for that user. Subscriptions (alerts, weather, forecast) and advanced permissions (email send/receive/broadcast, node tag send) are managed here. You can manage assigned tags and set a "blocked" status to ignore all commands from a specific user. The tab displays both the assigned role and the live reported role from the node's radio, highlighting discrepancies.
   * **Settings Tab**: Allows for easy editing of the system's core configuration file (`.env`) and provides SQLite maintenance actions (integrity check, WAL checkpoint, audit prune, backup, restore, vacuum). Backup/Restore/VACUUM are queued and executed by the dispatcher through SQLite command jobs (no web-side `systemctl` control required). This is where you can change GPS coordinates, email credentials, broadcast intervals, rate limits, weather data staleness (e.g., `WEATHER_DATA_MAX_AGE_MINUTES`), temporary group inactivity TTL (`TEMP_GROUP_TTL_DAYS`), outgoing email quarantine retention, and audit retention controls (`AUDIT_RETENTION_DAYS`, `AUDIT_MAX_ROWS`). **Remember to restart the dispatcher service after saving `.env` changes.**
   * **Help/About Tab**: Contains this detailed system documentation and version information.
 
