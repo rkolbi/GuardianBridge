@@ -4503,13 +4503,16 @@ $day ?></label>
             return normalizeTagName(clean.split(/\s+/, 1)[0].slice(1));
         }
 
-        function getMessageBracketGroupTarget(text) {
+        function getMessageBracketGroupTargets(text) {
             const clean = String(text || '').replace(/^\x07/, '').trim();
             const match = clean.match(/^\[([^\]]+)\]/);
             if (!match) {
-                return '';
+                return [];
             }
-            return normalizeTagName(match[1]);
+            return String(match[1])
+                .split(/[,\s]+/)
+                .map((part) => normalizeTagName(part))
+                .filter((part) => !!part);
         }
 
         function findNodeIdByMentionTarget(target) {
@@ -4578,12 +4581,16 @@ $day ?></label>
             }
             const text = String(msg?.text || '');
             const mentionTarget = getMessageMentionTarget(text);
-            const bracketTarget = getMessageBracketGroupTarget(text);
+            const bracketTargets = getMessageBracketGroupTargets(text);
+            const bracketMatch = bracketTargets.includes(normalizedGroup);
             const fromId = String(msg?.from || '').trim();
 
             if (fromId === 'GATEWAY') {
-                if (mentionTarget === normalizedGroup || bracketTarget === normalizedGroup) {
+                if (mentionTarget === normalizedGroup || bracketMatch) {
                     return true;
+                }
+                if (bracketTargets.length > 0) {
+                    return false;
                 }
                 if (!mentionTarget) {
                     return false;
@@ -4592,8 +4599,11 @@ $day ?></label>
                 return targetNodeId ? nodeBelongsToChatGroup(targetNodeId, normalizedGroup) : false;
             }
 
-            if (mentionTarget === normalizedGroup || bracketTarget === normalizedGroup) {
+            if (mentionTarget === normalizedGroup || bracketMatch) {
                 return true;
+            }
+            if (mentionTarget || bracketTargets.length > 0) {
+                return false;
             }
             return nodeBelongsToChatGroup(fromId, normalizedGroup);
         }

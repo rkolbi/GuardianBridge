@@ -1057,7 +1057,7 @@ $recent_audit_entries = gb_load_audit_logs($audit_preview_limit, $audit_scope_pa
             position: fixed;
             top: 12px;
             left: 12px;
-            width: clamp(180px, 16vw, 220px);
+            width: clamp(200px, 18vw, 250px);
             max-height: calc(100% - 24px);
             display: flex;
             flex-direction: column;
@@ -1938,10 +1938,10 @@ $recent_audit_entries = gb_load_audit_logs($audit_preview_limit, $audit_scope_pa
         }
         .leaflet-popup-content { margin: 10px 12px; }
         .leaflet-control-attribution { font-size: 0.65rem; }
-        .leaflet-top.leaflet-left { margin-left: clamp(190px, 17vw, 230px); }
+        .leaflet-top.leaflet-left { margin-left: clamp(210px, 19vw, 260px); }
         @media (max-width: 720px) {
-            #left-panel { width: clamp(160px, 36vw, 200px); }
-            .leaflet-top.leaflet-left { margin-left: clamp(170px, 34vw, 210px); }
+            #left-panel { width: clamp(175px, 40vw, 220px); }
+            .leaflet-top.leaflet-left { margin-left: clamp(185px, 38vw, 230px); }
         }
 </style>
 </head>
@@ -4508,13 +4508,16 @@ $recent_audit_entries = gb_load_audit_logs($audit_preview_limit, $audit_scope_pa
                 return normalizeTagName(clean.split(/\s+/, 1)[0].slice(1));
             }
 
-            function getMessageBracketGroupTarget(text) {
+            function getMessageBracketGroupTargets(text) {
                 const clean = String(text || '').replace(/^\x07/, '').trim();
                 const match = clean.match(/^\[([^\]]+)\]/);
                 if (!match) {
-                    return '';
+                    return [];
                 }
-                return normalizeTagName(match[1]);
+                return String(match[1])
+                    .split(/[,\s]+/)
+                    .map((part) => normalizeTagName(part))
+                    .filter((part) => !!part);
             }
 
             function findNodeIdByMentionTarget(target) {
@@ -4583,12 +4586,16 @@ $recent_audit_entries = gb_load_audit_logs($audit_preview_limit, $audit_scope_pa
                 }
                 const text = String(msg?.text || '');
                 const mentionTarget = getMessageMentionTarget(text);
-                const bracketTarget = getMessageBracketGroupTarget(text);
+                const bracketTargets = getMessageBracketGroupTargets(text);
+                const bracketMatch = bracketTargets.includes(normalizedGroup);
                 const fromId = String(msg?.from || '').trim();
 
                 if (fromId === 'GATEWAY') {
-                    if (mentionTarget === normalizedGroup || bracketTarget === normalizedGroup) {
+                    if (mentionTarget === normalizedGroup || bracketMatch) {
                         return true;
+                    }
+                    if (bracketTargets.length > 0) {
+                        return false;
                     }
                     if (!mentionTarget) {
                         return false;
@@ -4597,8 +4604,11 @@ $recent_audit_entries = gb_load_audit_logs($audit_preview_limit, $audit_scope_pa
                     return targetNodeId ? nodeBelongsToChatGroup(targetNodeId, normalizedGroup) : false;
                 }
 
-                if (mentionTarget === normalizedGroup || bracketTarget === normalizedGroup) {
+                if (mentionTarget === normalizedGroup || bracketMatch) {
                     return true;
+                }
+                if (mentionTarget || bracketTargets.length > 0) {
+                    return false;
                 }
                 return nodeBelongsToChatGroup(fromId, normalizedGroup);
             }

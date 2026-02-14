@@ -158,6 +158,24 @@ class EmailProcessorTests(unittest.TestCase):
         self.assertIn("Hello world", data.get("text", ""))
         self.assertTrue(self.feedback)
 
+    def test_broadcast_subject_requires_exact_keyword(self):
+        sender_email = "admin@example.com"
+        self.email_processor.gb_db.load_subscribers_dict = lambda: {
+            "!aaaa1111": {
+                "email": sender_email,
+                "name": "Admin",
+                "emailbroadcast": True,
+            }
+        }
+        msg = DummyMsg(10, sender_email, "Rebroadcast status update", text="This should not broadcast")
+        self.email_processor.MailBox.messages = [msg]
+
+        self.email_processor.process_incoming_emails()
+
+        jobs = self.email_processor.gb_db.list_command_jobs(statuses=["queued"])
+        self.assertEqual(jobs, [])
+        self.assertEqual(self.feedback, [])
+
     def test_tag_email_creates_relay_command(self):
         sender_email = "tagger@example.com"
         self.email_processor.gb_db.load_subscribers_dict = lambda: {
@@ -189,6 +207,14 @@ class EmailProcessorTests(unittest.TestCase):
         subject = "For !deadbeef and alice"
         recipients = self.email_processor.find_recipients_in_subject(subject, subscribers)
         self.assertEqual(set(recipients), {"!abcd1234", "!deadbeef"})
+
+    def test_find_recipients_in_subject_avoids_name_substring_false_positive(self):
+        subscribers = {
+            "!a1b2c3d4": {"name": "Al"},
+        }
+        subject = "Weather alert update"
+        recipients = self.email_processor.find_recipients_in_subject(subject, subscribers)
+        self.assertEqual(recipients, [])
 
     def test_process_incoming_emails_uses_to_header_fallback(self):
         sender_email = "sender@example.com"

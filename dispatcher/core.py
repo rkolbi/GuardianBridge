@@ -66,6 +66,7 @@ local_tz = pytz.timezone(get_localzone_name())
 iface = None
 subscribers = {}
 subscribers_lock = threading.Lock()
+subscribers_mtime = None
 dispatcher_state_lock = threading.Lock()
 dispatcher_state = {}
 log_lock = threading.Lock()
@@ -135,18 +136,25 @@ def save_json_locked(path, data):
         save_json(path, data)
 
 
-def reload_subscribers():
-    global subscribers
+def reload_subscribers(force=False):
+    global subscribers, subscribers_mtime
+    latest_mtime = gb_db.get_subscribers_mtime()
+    if not force and subscribers_mtime is not None and latest_mtime == subscribers_mtime:
+        logging.debug(f"Subscribers reload skipped (mtime unchanged: {latest_mtime}).")
+        return False
+
     with subscribers_lock:
         previous_count = len(subscribers)
         new_subscribers_data = gb_db.load_subscribers_dict() or {}
         subscribers.clear()
         subscribers.update(new_subscribers_data)
+        subscribers_mtime = latest_mtime
         current_count = len(subscribers)
         if current_count != previous_count:
             logging.info(f"Subscribers reloaded successfully. Total: {current_count}.")
         else:
             logging.debug(f"Subscribers reload completed. Total unchanged: {current_count}.")
+        return True
 
 
 def load_json(path):
@@ -253,19 +261,20 @@ def update_node_statuses(now=None):
         return
 
     with node_statuses_lock:
-        node_statuses = gb_db.load_node_statuses_dict() or {}
+        existing_statuses = gb_db.load_node_statuses_dict() or {}
 
         known_node_ids = set(iface.nodes.keys())
         with node_last_heard_cache_lock:
             known_node_ids.update(set(node_last_heard_cache.keys()))
 
+        desired_statuses = {}
         for node_id in known_node_ids:
             if node_id == gateway_node_id:
                 continue
 
             node = iface.nodes.get(node_id)
 
-            existing_node_data = node_statuses.get(node_id, {})
+            existing_node_data = existing_statuses.get(node_id, {})
             current_sos_status = existing_node_data.get("sos")
             current_active_tag = existing_node_data.get("active_tag_channel")
             last_known_lat = existing_node_data.get("latitude")
@@ -281,7 +290,7 @@ def update_node_statuses(now=None):
             with node_last_heard_cache_lock:
                 last_heard_ts = node_last_heard_cache.get(node_id, lib_last_heard)
 
-            node_statuses[node_id] = {
+            node_status = {
                 "role": role_name,
                 "lastHeard": last_heard_ts,
                 "snr": snr,
@@ -290,25 +299,44 @@ def update_node_statuses(now=None):
                 "longitude": lon if lon is not None else last_known_lon,
             }
             if current_sos_status:
-                node_statuses[node_id]["sos"] = current_sos_status
+                node_status["sos"] = current_sos_status
             if current_active_tag:
-                node_statuses[node_id]["active_tag_channel"] = current_active_tag
+                node_status["active_tag_channel"] = current_active_tag
+            desired_statuses[node_id] = node_status
 
         if gateway_node_id and gateway_node_id in iface.nodes:
             my_node = iface.nodes[gateway_node_id]
             my_role_int = my_node.get("role", 0)
             my_role_name = config_pb2.Config.DeviceConfig.Role.Name(my_role_int)
-            node_statuses[gateway_node_id] = {
+            existing_gateway = existing_statuses.get(gateway_node_id, {})
+            gateway_last_heard = existing_gateway.get("lastHeard")
+            if not isinstance(gateway_last_heard, (int, float)):
+                gateway_last_heard = time.time()
+            desired_statuses[gateway_node_id] = {
                 "role": my_role_name,
-                "lastHeard": time.time(),
+                "lastHeard": gateway_last_heard,
                 "snr": "N/A",
                 "hopsAway": 0,
                 "latitude": my_node.get("latitude"),
                 "longitude": my_node.get("longitude"),
             }
 
-        gb_db.replace_node_statuses(node_statuses)
-        logging.debug(f"Updated node status file for {len(node_statuses)} nodes.")
+        desired_ids = set(desired_statuses.keys())
+        existing_ids = set(existing_statuses.keys())
+        upsert_count = 0
+        for node_id, status in desired_statuses.items():
+            if existing_statuses.get(node_id) != status:
+                gb_db.upsert_node_status(node_id, status)
+                upsert_count += 1
+
+        delete_count = 0
+        for stale_node_id in (existing_ids - desired_ids):
+            gb_db.delete_node_status(stale_node_id)
+            delete_count += 1
+
+        logging.debug(
+            f"Updated node statuses: total={len(desired_statuses)} upserted={upsert_count} deleted={delete_count}."
+        )
 
 
 def update_dispatcher_status(now=None):
@@ -566,7 +594,7 @@ def main():
 
     pub.subscribe(on_meshtastic_message, "meshtastic.receive")
 
-    reload_subscribers()
+    reload_subscribers(force=True)
     dispatcher_state = load_json(settings.DISPATCHER_STATE_FILE) or {}
 
     logging.info("Performing initial broadcast of active NWS alerts...")
@@ -602,7 +630,7 @@ def main():
             daemon=True,
         ),
         threading.Thread(target=run_periodic_task, args=(update_node_statuses, 30, "update_node_statuses"), daemon=True),
-        threading.Thread(target=run_periodic_task, args=(lambda now: reload_subscribers(), 30, "reload_subscribers"), daemon=True),
+        threading.Thread(target=run_periodic_task, args=(lambda now: reload_subscribers(force=False), 30, "reload_subscribers"), daemon=True),
         threading.Thread(target=run_periodic_task, args=(handle_temp_group_expiry, 3600, "handle_temp_group_expiry"), daemon=True),
         threading.Thread(
             target=run_periodic_task,

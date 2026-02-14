@@ -181,14 +181,36 @@ def send_feedback_email(recipient, subject, body):
         logging.error(f"Failed to send feedback email to {recipient}: {e}", exc_info=True)
 
 def find_recipients_in_subject(subject, subscribers):
+    subject_text = str(subject or "")
+    subject_lower = subject_text.lower()
     resolved_node_ids = set()
-    found_ids = re.findall(r'(![a-fA-F0-9]{8})', subject)
+    found_ids = re.findall(r'(![a-fA-F0-9]{8})', subject_text)
     for node_id in found_ids: resolved_node_ids.add(node_id)
     for node_id, data in subscribers.items():
-        name = data.get("name")
-        if name and name.lower() in subject.lower():
+        name = str(data.get("name") or "").strip()
+        if not name:
+            continue
+        # Match whole name tokens only to avoid substring false-positives (e.g. "AL" in "alert").
+        name_pattern = r"(?<![a-z0-9])" + re.escape(name.lower()) + r"(?![a-z0-9])"
+        if re.search(name_pattern, subject_lower):
             resolved_node_ids.add(node_id)
     return list(resolved_node_ids)
+
+
+def parse_broadcast_subject(subject_raw):
+    normalized = str(subject_raw or "").strip().lower()
+    if normalized not in {"broadcast", "!broadcast", "broadcast!"}:
+        return False, False
+    is_alert = normalized.startswith("!") or normalized.endswith("!")
+    return True, is_alert
+
+
+def parse_tag_subject_tags(subject_raw):
+    match = re.match(r"^tag\s+(.+)$", str(subject_raw or "").strip(), flags=re.IGNORECASE)
+    if not match:
+        return []
+    tags = [tag.strip().upper() for tag in match.group(1).split()]
+    return [tag for tag in tags if tag]
 
 def process_incoming_emails():
     subscribers = gb_db.load_subscribers_dict() or {}
@@ -244,13 +266,12 @@ def process_incoming_emails():
                     logging.info(f"Processing email from {sender_email}: {msg.subject}")
                     
                     subject_raw = (msg.subject or '').strip()
-                    subject_lower = subject_raw.lower()
                     raw_body = msg.text or (BeautifulSoup(msg.html or '', 'html.parser').get_text(separator='\n').strip())
                     
-                    if 'broadcast' in subject_lower:
+                    is_broadcast_subject, is_alert = parse_broadcast_subject(subject_raw)
+                    if is_broadcast_subject:
                         sender_name = find_and_authorize_broadcast_sender(sender_email, subscribers)
                         if sender_name:
-                            is_alert = subject_lower.startswith('!') or subject_lower.endswith('!')
                             log_msg = f"Authorized broadcast request from {sender_name} ({sender_email})"
                             if is_alert: log_msg += " with alert"
                             logging.info(log_msg)
@@ -295,16 +316,10 @@ def process_incoming_emails():
                         processed_uids.append(msg.uid)
                         continue
 
-                    if subject_lower.startswith('tag '):
+                    target_tags = parse_tag_subject_tags(subject_raw)
+                    if target_tags:
                         sender_name = find_and_authorize_broadcast_sender(sender_email, subscribers)
                         if sender_name:
-                            target_tags = [tag.strip().upper() for tag in subject_raw[4:].strip().split()]
-                            
-                            if not target_tags:
-                                logging.warning(f"Tag-based email from {sender_email} received with no specified tags. Ignoring.")
-                                processed_uids.append(msg.uid)
-                                continue
-
                             logging.info(f"Processing authorized tag-based relay from {sender_email} for tags: {target_tags}")
                             
                             recipient_ids = set()

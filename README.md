@@ -253,10 +253,12 @@ This guide walks you through the complete setup for both the backend services an
     *If you use Nginx, install `php-fpm` and `php-sqlite3` instead.*
 2.  **Place the web panel files in the web root:**
     ```bash
-    sudo cp /path/to/your/map.php /var/www/html/index.php
-    sudo cp /path/to/your/mop.php /var/www/html/mop.php
+    sudo cp /opt/GuardianBridge/www/map.php /var/www/html/map.php
+    sudo cp /opt/GuardianBridge/www/mop.php /var/www/html/mop.php
+    sudo cp /opt/GuardianBridge/www/db.php /var/www/html/db.php
+    sudo cp -r /opt/GuardianBridge/www/map-items /var/www/html/map-items
     ```
-    *Renaming `map.php` to `index.php` makes it the default admin page when you navigate to the server's IP address. The operator console will be at `/mop.php`.*
+    *`map.php` and `mop.php` both require `db.php` and `/map-items/*` to exist in the same web root. If desired, make MAP the default page with `sudo ln -sf /var/www/html/map.php /var/www/html/index.php`.*
 3.  **Set crucial file permissions for the web server:** This is the most critical step. The web server user (`www-data`) needs to be able to write to the project directory.
     ```bash
     sudo usermod -a -G www-data pi
@@ -523,7 +525,7 @@ All files are located within the `/opt/GuardianBridge/` directory.
   * **Emails are not being sent/received**: Run `python3 /opt/GuardianBridge/email_processor.py` manually. Check for authentication errors and ensure you are using a correct App Password for Gmail. Check the `data/email_processor.lastrun` file timestamp.
   * **Broadcast email failed**: If you receive a rejection email, check the subscriber record in `guardianbridge.db` (the `subscribers` table) to ensure your email address is listed and the `"emailbroadcast": true` flag is set. You can also verify this in the Admin Panel.
   * **Admin Panel shows "failed to write" or "not readable" errors**: This is almost always a file permissions issue. Ensure the web server user (`www-data`) has write access to the `/opt/GuardianBridge/` directory and its contents. Refer to the installation steps.
-  * **A user is blocked/unblocked, but it doesn't take effect**: Restart the dispatcher service (`sudo systemctl restart guardianbridge.service`) to force it to reload subscribers from `guardianbridge.db`.
+  * **A user is blocked/unblocked, but it doesn't take effect immediately**: The dispatcher reloads subscribers automatically (about every 30 seconds). If needed, force an immediate apply with `sudo systemctl restart guardianbridge.service`.
   * **Settings changed in panel but not taking effect**: You must restart the main dispatcher service after saving changes to the `.env` file: `sudo systemctl restart guardianbridge.service`.
   * **SOS alert not clearing or not being received by responders**: Verify the node's `sos` status in the `node_status` table and the SOS entries in the `sos_log` table inside `guardianbridge.db`. Ensure responders have the correct tags assigned in the `subscribers` table. Check dispatcher logs for errors during SOS processing or message sending. If an admin clear command was used, verify it was queued and processed in SQLite `command_jobs`.
 

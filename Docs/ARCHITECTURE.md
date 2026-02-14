@@ -38,7 +38,7 @@ GuardianBridge is split into a core dispatcher package and supporting scripts. T
 
 ## Database Layout (v1.4.0)
 
-SQLite is used for high-traffic data in `data/guardianbridge.db`:
+SQLite is used for runtime state in `data/guardianbridge.db`:
 
 - `subscribers` (JSON per row)
 - `node_status` (JSON per row)
@@ -48,8 +48,14 @@ SQLite is used for high-traffic data in `data/guardianbridge.db`:
 - `outgoing_emails` (JSON per row)
 - `outgoing_emails_quarantine` (JSON per row, pruned by retention limit)
 - `failed_dm_queue` (JSON per row)
+- `temp_groups` (temporary tag-group membership/lifecycle)
+- `command_jobs` (queued command payloads with lease/retry status)
+- `command_receipts` (duplicate-suppression receipt history)
+- `command_dead_letters` (invalid/exhausted command payloads)
+- `audit_log` (MAP/MOP high-impact action trail)
+- `login_failures` (web authentication rate-limit state)
 
-JSON remains in use for caches like `dispatcher_state.json`, `weather_*.json`, and `nws_alerts.json`.
+JSON remains in use for caches and status files such as `dispatcher_state.json`, `dispatcher_status.json`, `weather_*.json`, and `nws_alerts.json`.
 
 ## Normalization Roadmap (Optional v1.4+)
 
