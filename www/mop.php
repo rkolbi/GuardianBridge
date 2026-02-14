@@ -26,13 +26,61 @@ require_once __DIR__ . '/db.php';
 $base_dir = '/opt/GuardianBridge';
 $env_file = $base_dir . '/.env';
 $commands_dir = $base_dir . '/data/commands';
+$gb_page_perf_start = microtime(true);
+register_shutdown_function(function () use ($gb_page_perf_start) {
+    $elapsed_ms = (microtime(true) - $gb_page_perf_start) * 1000;
+    if ($elapsed_ms >= 1500) {
+        $is_ajax = (isset($_POST['ajax']) && $_POST['ajax'] === 'true') ? ':ajax' : '';
+        error_log(sprintf('GuardianBridge Perf: mop.php%s %.1fms', $is_ajax, $elapsed_ms));
+    }
+});
 
 // --- AUTHENTICATION CONFIG (operator selection) ---
-$available_users = array_filter(gb_load_subscribers(), function ($user) {
-    $hash = $user['password_hash'] ?? '';
-    return is_string($hash) && $hash !== '';
-});
-ksort($available_users);
+function mop_load_operator_directory() {
+    try {
+        $pdo = gb_db();
+        $stmt = $pdo->query("SELECT node_id, json_extract(data_json, '$.name') AS name, json_extract(data_json, '$.password_hash') AS password_hash, json_extract(data_json, '$.role') AS role, json_extract(data_json, '$.tags') AS tags_json FROM subscribers");
+        $directory = [];
+        while (($row = $stmt->fetch(PDO::FETCH_ASSOC)) !== false) {
+            $node_id = trim((string)($row['node_id'] ?? ''));
+            if ($node_id === '') {
+                continue;
+            }
+            $tags = [];
+            $tags_json = $row['tags_json'] ?? null;
+            if (is_string($tags_json) && $tags_json !== '') {
+                $decoded_tags = json_decode($tags_json, true);
+                if (is_array($decoded_tags)) {
+                    $tags = $decoded_tags;
+                }
+            } elseif (is_array($tags_json)) {
+                $tags = $tags_json;
+            }
+            $directory[$node_id] = [
+                'name' => (string)($row['name'] ?? ''),
+                'password_hash' => (string)($row['password_hash'] ?? ''),
+                'role' => (string)($row['role'] ?? ''),
+                'tags' => $tags,
+            ];
+        }
+        return $directory;
+    } catch (Throwable $e) {
+        $fallback = gb_load_subscribers();
+        $directory = [];
+        foreach ($fallback as $node_id => $user) {
+            if (!is_array($user)) {
+                continue;
+            }
+            $directory[$node_id] = [
+                'name' => (string)($user['name'] ?? ''),
+                'password_hash' => (string)($user['password_hash'] ?? ''),
+                'role' => (string)($user['role'] ?? ''),
+                'tags' => is_array($user['tags'] ?? null) ? $user['tags'] : [],
+            ];
+        }
+        return $directory;
+    }
+}
 
 ini_set('session.use_strict_mode', '1');
 ini_set('session.use_only_cookies', '1');
@@ -60,6 +108,22 @@ if (isset($_GET['logout'])) {
     session_destroy();
     header('Location: ' . strtok($_SERVER['REQUEST_URI'], '?'));
     exit;
+}
+
+$operator_directory = [];
+$available_users = [];
+$needs_operator_directory = (
+    !isset($_SESSION['mop_loggedin']) ||
+    $_SESSION['mop_loggedin'] !== true ||
+    ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'login')
+);
+if ($needs_operator_directory) {
+    $operator_directory = mop_load_operator_directory();
+    $available_users = array_filter($operator_directory, function ($user) {
+        $hash = $user['password_hash'] ?? '';
+        return is_string($hash) && $hash !== '';
+    });
+    ksort($available_users);
 }
 
 // --- LOGIN LOGIC ---
@@ -211,8 +275,8 @@ if (!isset($_SESSION['mop_loggedin']) || $_SESSION['mop_loggedin'] !== true) {
 
 $audit_actor = trim((string)($_SESSION['operator_user'] ?? $_SESSION['operator_name'] ?? 'operator'));
 $operator_user_id = trim((string)($_SESSION['operator_user'] ?? ''));
-$operator_profile = (isset($available_users[$operator_user_id]) && is_array($available_users[$operator_user_id]))
-    ? $available_users[$operator_user_id]
+$operator_profile = (isset($operator_directory[$operator_user_id]) && is_array($operator_directory[$operator_user_id]))
+    ? $operator_directory[$operator_user_id]
     : [];
 $operator_tags = $operator_profile['tags'] ?? [];
 $operator_tags_upper = [];
@@ -386,11 +450,25 @@ if (isset($_POST['ajax']) && $_POST['ajax'] === 'true') {
             }
         } elseif ($action === 'send_broadcast') {
             $text_to_send = $_POST['broadcast_text'] ?? '';
+            $forced_target_group = strtoupper(trim((string)($_POST['target_group'] ?? '')));
             $command_data = [];
             $error_message = '';
 
             if (empty(trim($text_to_send))) {
                 $error_message = 'Message text cannot be empty.';
+            } elseif ($forced_target_group !== '') {
+                $message_body = trim((string)$text_to_send);
+                if (preg_match('/^@([^\s]+)\s*(.*)$/s', $message_body, $forced_match)) {
+                    $forced_mention = strtoupper(trim((string)($forced_match[1] ?? '')));
+                    if ($forced_mention === $forced_target_group) {
+                        $message_body = (string)($forced_match[2] ?? '');
+                    }
+                }
+                if (trim($message_body) === '') {
+                    $error_message = 'Direct message has no text. Format: @user/@tag/@all message';
+                } else {
+                    $command_data = ['command' => 'tagsend', 'tags' => $forced_target_group, 'text' => $message_body];
+                }
             } else {
                 if (strpos($text_to_send, '@') === 0) {
                     $parts = explode(' ', $text_to_send, 2);
@@ -403,28 +481,30 @@ if (isset($_POST['ajax']) && $_POST['ajax'] === 'true') {
                     } else {
                         $subscribers = get_subscribers('');
                         $destination_id = null;
+                        $target_tag = strtoupper($target_str);
+                        $tag_found = false;
                         if (preg_match('/^![a-f0-9]{8}$/', $target_str)) {
                             $destination_id = $target_str;
                         } else {
                             foreach ($subscribers as $node_id => $user_data) {
-                                if (isset($user_data['name']) && strtolower($user_data['name']) === strtolower($target_str)) {
+                                if (isset($user_data['name']) && strcasecmp((string)$user_data['name'], $target_str) === 0) {
                                     $destination_id = $node_id;
                                     break;
+                                }
+                                $tags = $user_data['tags'] ?? [];
+                                if (!$tag_found && is_array($tags)) {
+                                    foreach ($tags as $tag) {
+                                        if (strtoupper((string)$tag) === $target_tag) {
+                                            $tag_found = true;
+                                            break;
+                                        }
+                                    }
                                 }
                             }
                         }
                         if ($destination_id) {
                             $command_data = ['command' => 'dm', 'destinationId' => $destination_id, 'text' => $message_body, 'recipient' => $target_str];
                         } else {
-                            $target_tag = strtoupper($target_str);
-                            $tag_found = false;
-                            foreach ($subscribers as $node_id => $user_data) {
-                                $tags = $user_data['tags'] ?? [];
-                                if (is_array($tags) && in_array($target_tag, array_map('strtoupper', $tags), true)) {
-                                    $tag_found = true;
-                                    break;
-                                }
-                            }
                             if (!$tag_found && gb_temp_group_exists($target_tag)) {
                                 $tag_found = true;
                             }
@@ -463,6 +543,28 @@ if (isset($_POST['ajax']) && $_POST['ajax'] === 'true') {
                 }
             } elseif (!empty($error_message)) {
                 $response['message'] = $error_message;
+            }
+        } elseif ($action === 'get_user') {
+            $node_id = trim((string)($_POST['node_id'] ?? ''));
+            if ($node_id === '') {
+                $response['message'] = 'Node ID is required.';
+            } else {
+                $subscribers = get_subscribers('');
+                if (!isset($subscribers[$node_id])) {
+                    $response['success'] = true;
+                    $response['exists'] = false;
+                    $response['user'] = null;
+                    $response['message'] = 'User not found.';
+                } else {
+                    $user = $subscribers[$node_id];
+                    if (is_array($user) && isset($user['password_hash'])) {
+                        unset($user['password_hash']);
+                    }
+                    $response['success'] = true;
+                    $response['exists'] = true;
+                    $response['user'] = array_merge(['node_id' => $node_id], is_array($user) ? $user : []);
+                    $response['message'] = 'User loaded.';
+                }
             }
         } elseif ($action === 'update_ops_notes') {
             $node_id = trim((string)($_POST['node_id'] ?? ''));
@@ -507,7 +609,7 @@ $settings = get_env_settings($env_file, [
 $gateway_lat = $settings['LATITUDE'] !== '' ? floatval($settings['LATITUDE']) : 30.0000;
 $gateway_lon = $settings['LONGITUDE'] !== '' ? floatval($settings['LONGITUDE']) : -90.0000;
 $polling_interval = max(1000, intval($settings['POLLING_INTERVAL_MS'] ?? 5000));
-$chat_polling_interval = max(500, intval($settings['CHAT_POLLING_INTERVAL_MS'] ?? 2000));
+$chat_polling_interval = max(500, intval($settings['CHAT_POLLING_INTERVAL_MS'] ?? 1000));
 $stale_node_minutes = intval($settings['STALE_NODE_MINUTES'] ?? 120);
 $days_of_week = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
 
@@ -904,23 +1006,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['ajax'])) {
     }
 }
 
-$queue_preview_limit = 50;
-$dead_letter_preview_limit = 50;
-$audit_preview_limit = 60;
-$dispatcher_jobs = gb_load_dispatcher_jobs();
-$subscribers = gb_load_subscribers();
-ksort($subscribers);
-$node_statuses = gb_load_node_statuses();
-$outgoing_email_count = gb_count_outgoing_emails();
-$outgoing_quarantine_count = gb_count_outgoing_emails_quarantine();
-$failed_dm_count = gb_count_failed_dm_queue();
+$queue_preview_limit = 25;
+$dead_letter_preview_limit = 25;
+$audit_preview_limit = 30;
+$dispatcher_jobs = [];
+$subscribers = [];
+$node_statuses = [];
 $outgoing_emails = gb_load_outgoing_emails($queue_preview_limit);
 $outgoing_quarantine = gb_load_outgoing_emails_quarantine($queue_preview_limit);
 $failed_dms = gb_load_failed_dm_queue($queue_preview_limit);
 $command_dead_letters = gb_load_command_dead_letters($dead_letter_preview_limit);
-$command_dead_letter_count = gb_count_command_dead_letters();
+$outgoing_email_count = count($outgoing_emails);
+$outgoing_quarantine_count = count($outgoing_quarantine);
+$failed_dm_count = count($failed_dms);
+$command_dead_letter_count = count($command_dead_letters);
 $recent_audit_entries = gb_load_audit_logs($audit_preview_limit, $audit_scope_panel, $audit_scope_actor);
-$total_audit_count = gb_count_audit_logs($audit_scope_panel, $audit_scope_actor);
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -1975,7 +2075,7 @@ $total_audit_count = gb_count_audit_logs($audit_scope_panel, $audit_scope_actor)
                 <div class="card">
                     <div class="card-title">Outgoing Email Queue (<?= intval($outgoing_email_count) ?>)</div>
                     <?php if (!empty($outgoing_emails)): ?>
-                        <?php if ($outgoing_email_count > count($outgoing_emails)): ?>
+                        <?php if (count($outgoing_emails) >= $queue_preview_limit): ?>
                             <div class="status-muted">Showing latest <?= count($outgoing_emails) ?> entries for fast page load.</div>
                         <?php endif; ?>
                         <div class="scroll-list">
@@ -1999,7 +2099,7 @@ $total_audit_count = gb_count_audit_logs($audit_scope_panel, $audit_scope_actor)
                 <div class="card">
                     <div class="card-title">Outgoing Email Quarantine (<?= intval($outgoing_quarantine_count) ?>)</div>
                     <?php if (!empty($outgoing_quarantine)): ?>
-                        <?php if ($outgoing_quarantine_count > count($outgoing_quarantine)): ?>
+                        <?php if (count($outgoing_quarantine) >= $queue_preview_limit): ?>
                             <div class="status-muted">Showing latest <?= count($outgoing_quarantine) ?> entries for fast page load.</div>
                         <?php endif; ?>
                         <div class="scroll-list">
@@ -2033,7 +2133,7 @@ $total_audit_count = gb_count_audit_logs($audit_scope_panel, $audit_scope_actor)
                 <div class="card">
                     <div class="card-title">Queued Direct Messages (<?= intval($failed_dm_count) ?>)</div>
                     <?php if (!empty($failed_dms)): ?>
-                        <?php if ($failed_dm_count > count($failed_dms)): ?>
+                        <?php if (count($failed_dms) >= $queue_preview_limit): ?>
                             <div class="status-muted">Showing latest <?= count($failed_dms) ?> entries for fast page load.</div>
                         <?php endif; ?>
                         <div class="scroll-list">
@@ -2053,7 +2153,7 @@ $total_audit_count = gb_count_audit_logs($audit_scope_panel, $audit_scope_actor)
                 <div class="card">
                     <div class="card-title">Command Dead-Letter Queue (<?= intval($command_dead_letter_count) ?>)</div>
                     <?php if (!empty($command_dead_letters)): ?>
-                        <?php if ($command_dead_letter_count > count($command_dead_letters)): ?>
+                        <?php if (count($command_dead_letters) >= $dead_letter_preview_limit): ?>
                             <div class="status-muted">Showing latest <?= count($command_dead_letters) ?> entries for fast page load.</div>
                         <?php endif; ?>
                         <div class="scroll-list">
@@ -2122,10 +2222,7 @@ $total_audit_count = gb_count_audit_logs($audit_scope_panel, $audit_scope_actor)
 
                 <div class="card">
                     <div class="card-title">Recent Audit Activity (<?= count($recent_audit_entries) ?>)</div>
-                    <div class="status-muted">Scope: <?= htmlspecialchars($audit_scope_label) ?>. Total visible rows: <?= intval($total_audit_count) ?>.</div>
-                    <?php if ($total_audit_count > count($recent_audit_entries)): ?>
-                        <div class="status-muted">Showing latest <?= count($recent_audit_entries) ?> entries for fast page load.</div>
-                    <?php endif; ?>
+                    <div class="status-muted">Scope: <?= htmlspecialchars($audit_scope_label) ?>. Showing latest <?= count($recent_audit_entries) ?> entries for fast page load.</div>
                     <div class="row mt-2">
                         <form method="POST" class="row">
                             <input type="hidden" name="action" value="export_audit_log_json">
@@ -2242,41 +2339,8 @@ $total_audit_count = gb_count_audit_logs($audit_scope_panel, $audit_scope_actor)
                                     <th>Actions</th>
                                 </tr>
                             </thead>
-                            <tbody>
-                                <?php if (!empty($dispatcher_jobs)): foreach ($dispatcher_jobs as $index => $job): $job['job_index'] = $index; ?>
-                                    <tr>
-                                        <td><?= ($job['enabled'] ?? false) ? 'Enabled' : 'Disabled' ?></td>
-                                        <td><?= htmlspecialchars($job['name'] ?? 'N/A') ?></td>
-                                        <td>
-                                            <?php
-                                            if (isset($job['days'])) {
-                                                foreach ($days_of_week as $day) {
-                                                    $is_active = in_array($day, $job['days']);
-                                                    $char = substr($day, 0, 1);
-                                                    echo '<span style="color:' . ($is_active ? '#60a5fa' : '#52525b') . ';">' . $char . '</span> ';
-                                                }
-                                            } else {
-                                                echo '<span class="status-muted">Event</span>';
-                                            }
-                                            ?>
-                                        </td>
-                                        <td><?= htmlspecialchars($job['interval_mins'] ?? 'N/A') ?> mins</td>
-                                        <td>
-                                            <?php
-                                            if (isset($job['start_datetime'])) {
-                                                echo htmlspecialchars($job['start_datetime']) . ' to ' . htmlspecialchars($job['stop_datetime']);
-                                            } else {
-                                                echo htmlspecialchars($job['start_time'] ?? 'N/A') . ' - ' . htmlspecialchars($job['stop_time'] ?? 'N/A');
-                                            }
-                                            ?>
-                                        </td>
-                                        <td>
-                                            <button type="button" class="btn btn-secondary open-broadcast-edit-modal" data-job-data="<?= htmlspecialchars(json_encode($job), ENT_QUOTES, 'UTF-8') ?>">More...</button>
-                                        </td>
-                                    </tr>
-                                <?php endforeach; else: ?>
-                                    <tr><td colspan="6" class="status-muted">No custom broadcast jobs found.</td></tr>
-                                <?php endif; ?>
+                            <tbody id="mop-broadcasts-table-body">
+                                <tr><td colspan="6" class="status-muted">Loading broadcasts...</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -2327,45 +2391,8 @@ $total_audit_count = gb_count_audit_logs($audit_scope_panel, $audit_scope_actor)
                                     <th>Actions</th>
                                 </tr>
                             </thead>
-                            <tbody>
-                                <?php if (!empty($subscribers)): foreach ($subscribers as $node_id => $user): $user['node_id'] = $node_id; ?>
-                                    <?php
-                                        $assigned_role = $user['role'] ?? 'Not Set';
-                                        $reported_role_data = $node_statuses[$node_id] ?? null;
-                                        $reported_role = $reported_role_data ? htmlspecialchars($reported_role_data['role']) : 'Unknown';
-                                        $is_match = (strtoupper($assigned_role) === strtoupper($reported_role));
-                                        $role_class = $reported_role === 'Unknown' ? 'status-muted' : ($is_match ? 'status-ok' : 'status-warn');
-                                    ?>
-                                    <tr>
-                                        <td class="font-mono">
-                                            <button type="button" class="open-dm-chat" data-node-id="<?= htmlspecialchars($node_id) ?>" data-node-name="<?= htmlspecialchars($user['name'] ?? $node_id) ?>">
-                                                <?= htmlspecialchars($node_id) ?>
-                                            </button>
-                                        </td>
-                                        <td><?= htmlspecialchars($user['name'] ?? '') ?></td>
-                                        <td>
-                                            <div class="role-pill <?= $role_class ?>"><?= $reported_role ?></div>
-                                            <div><?= htmlspecialchars($assigned_role) ?></div>
-                                        </td>
-                                        <td><?= htmlspecialchars($user['full_name'] ?? '') ?></td>
-                                        <td><?= htmlspecialchars($user['phone_1'] ?? '') ?></td>
-                                        <td class="status-muted">
-                                            <?php
-                                            if (!empty($user['tags']) && is_array($user['tags'])) {
-                                                echo htmlspecialchars(implode(', ', $user['tags']));
-                                            } else {
-                                                echo '—';
-                                            }
-                                            ?>
-                                        </td>
-                                        <td>
-                                            <?php $safe_user = $user; unset($safe_user['password_hash']); ?>
-                                            <button type="button" class="btn btn-secondary open-user-edit-modal" data-user-data="<?= htmlspecialchars(json_encode($safe_user), ENT_QUOTES, 'UTF-8') ?>">More...</button>
-                                        </td>
-                                    </tr>
-                                <?php endforeach; else: ?>
-                                    <tr><td colspan="7" class="status-muted">Subscribers file is empty or not readable.</td></tr>
-                                <?php endif; ?>
+                            <tbody id="mop-users-table-body">
+                                <tr><td colspan="7" class="status-muted">Loading subscribers...</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -2630,6 +2657,7 @@ $total_audit_count = gb_count_audit_logs($audit_scope_panel, $audit_scope_actor)
                 <div class="chat-header-actions">
                     <button type="button" id="dm-chat-map-btn" class="chat-map-btn" disabled>Map</button>
                     <button type="button" id="dm-chat-info-btn" class="chat-map-btn" disabled>Info</button>
+                    <button type="button" id="dm-chat-user-btn" class="chat-map-btn" disabled>User</button>
                     <button type="button" id="close-dm-modal-btn" aria-label="Close">&times;</button>
                 </div>
             </div>
@@ -2657,10 +2685,17 @@ $total_audit_count = gb_count_audit_logs($audit_scope_panel, $audit_scope_actor)
             let autoFitEnabled = true;
             let chatCursor = 0;
             let subscribersMtime = 0;
+            let chatSubscribersMtime = 0;
             let nodesEtag = '';
+            let dashboardEtag = '';
             let chatEtag = '';
+            let chatTempGroupsToken = '';
             let lastFetchedMessages = [];
+            let chatMessageKeys = new Set();
             let lastFetchedSubscribers = {};
+            let subscriberNameTargets = new Set();
+            let localUserDirectory = Object.create(null);
+            let userEditButtonsByNodeId = Object.create(null);
             let lastFetchedTempGroups = [];
             const CHAT_GROUP_CHANNEL = '__CHANNEL__';
             let selectedChatGroup = '';
@@ -2685,12 +2720,21 @@ $total_audit_count = gb_count_audit_logs($audit_scope_panel, $audit_scope_actor)
             let chatBackoffMs = 0;
             let statusPollTimer = null;
             let chatPollTimer = null;
+            let statusPollInFlight = false;
+            let chatPollInFlight = false;
+            let updatePageInFlight = null;
+            let updateDashboardInFlight = null;
+            let updateChatInFlight = null;
+            let adminUsersTableEtag = '';
+            let adminBroadcastsTableEtag = '';
+            let adminUsersFetchInFlight = null;
+            let adminBroadcastsFetchInFlight = null;
             let isPollingPaused = document.hidden;
             let chatStreamSource = null;
             let chatStreamRetryTimer = null;
             let chatStreamConnected = false;
             const MAX_BACKOFF_MS = 60000;
-            const CHAT_STREAM_ENABLED = typeof window.EventSource !== 'undefined';
+            const CHAT_STREAM_ENABLED = false;
             const CHAT_STREAM_TIMEOUT_MS = 20000;
             const CHAT_STREAM_RETRY_MS = 1500;
             const serverMessagePrefixes = [
@@ -2943,64 +2987,77 @@ $total_audit_count = gb_count_audit_logs($audit_scope_panel, $audit_scope_actor)
                 }, 150);
             }
             async function updatePageData() {
-                try {
-                    const requestHeaders = {};
-                    if (nodesEtag) {
-                        requestHeaders['If-None-Match'] = nodesEtag;
-                    }
-                    const response = await fetch('/map-items/api_get_nodes.php', { headers: requestHeaders });
-                    const responseEtag = response.headers.get('ETag');
-                    if (responseEtag) {
-                        nodesEtag = responseEtag;
-                    }
-                    if (response.status === 304) {
+                if (updatePageInFlight) {
+                    return updatePageInFlight;
+                }
+                const requestPromise = (async () => {
+                    try {
+                        const requestHeaders = {};
+                        if (nodesEtag) {
+                            requestHeaders['If-None-Match'] = nodesEtag;
+                        }
+                        const response = await fetch('/map-items/api_get_nodes.php', { headers: requestHeaders });
+                        const responseEtag = response.headers.get('ETag');
+                        if (responseEtag) {
+                            nodesEtag = responseEtag;
+                        }
+                        if (response.status === 304) {
+                            return true;
+                        }
+                        if (!response.ok) {
+                            console.error('Failed to fetch node data. Status:', response.status);
+                            return false;
+                        }
+                        const payload = await response.json();
+                        const nodes = payload && payload.nodes ? payload.nodes : payload;
+                        if (!Array.isArray(nodes)) return false;
+                        if (payload && typeof payload.subscribers_mtime === 'number') {
+                            subscribersMtime = payload.subscribers_mtime;
+                        }
+
+                        const nodesSignature = buildNodesSignature(nodes);
+                        if (nodesSignature === lastNodesSignature) {
+                            return true;
+                        }
+                        lastNodesSignature = nodesSignature;
+
+                        lastNodePositions = {};
+                        lastFetchedNodesById = {};
+                        nodes.forEach(node => {
+                            if (node.node_id) {
+                                lastFetchedNodesById[node.node_id] = node;
+                            }
+                            const coords = getPreferredCoords(node);
+                            if (coords && node.node_id) {
+                                lastNodePositions[node.node_id] = { lat: coords.lat, lon: coords.lon };
+                            }
+                        });
+
+                        const activeSosIds = new Set(nodes.filter(n => n.sos).map(n => n.node_id));
+                        acknowledgedSosNodes.forEach(nodeId => {
+                            if (!activeSosIds.has(nodeId)) {
+                                acknowledgedSosNodes.delete(nodeId);
+                            }
+                        });
+
+                        updateNodeList(nodes);
+                        updateAdminSosList(nodes);
+                        updateSosBanner(nodes);
+                        updateSosPopup(nodes);
+                        updateMapMarkers(nodes);
                         return true;
-                    }
-                    if (!response.ok) {
-                        console.error('Failed to fetch node data. Status:', response.status);
+                    } catch (error) {
+                        console.error('Error fetching node data:', error);
                         return false;
                     }
-                    const payload = await response.json();
-                    const nodes = payload && payload.nodes ? payload.nodes : payload;
-                    if (!Array.isArray(nodes)) return false;
-                    if (payload && typeof payload.subscribers_mtime === 'number') {
-                        subscribersMtime = payload.subscribers_mtime;
+                })();
+                updatePageInFlight = requestPromise;
+                try {
+                    return await requestPromise;
+                } finally {
+                    if (updatePageInFlight === requestPromise) {
+                        updatePageInFlight = null;
                     }
-
-                    const nodesSignature = buildNodesSignature(nodes);
-                    if (nodesSignature === lastNodesSignature) {
-                        return true;
-                    }
-                    lastNodesSignature = nodesSignature;
-
-                    lastNodePositions = {};
-                    lastFetchedNodesById = {};
-                    nodes.forEach(node => {
-                        if (node.node_id) {
-                            lastFetchedNodesById[node.node_id] = node;
-                        }
-                        const coords = getPreferredCoords(node);
-                        if (coords && node.node_id) {
-                            lastNodePositions[node.node_id] = { lat: coords.lat, lon: coords.lon };
-                        }
-                    });
-
-                    const activeSosIds = new Set(nodes.filter(n => n.sos).map(n => n.node_id));
-                    acknowledgedSosNodes.forEach(nodeId => {
-                        if (!activeSosIds.has(nodeId)) {
-                            acknowledgedSosNodes.delete(nodeId);
-                        }
-                    });
-
-                    updateNodeList(nodes);
-                    updateAdminSosList(nodes);
-                    updateSosBanner(nodes);
-                    updateSosPopup(nodes);
-                    updateMapMarkers(nodes);
-                    return true;
-                } catch (error) {
-                    console.error('Error fetching node data:', error);
-                    return false;
                 }
             }
 
@@ -3691,13 +3748,28 @@ $total_audit_count = gb_count_audit_logs($audit_scope_panel, $audit_scope_actor)
             }
 
             async function updateDashboardData() {
-                try {
-                    const response = await fetch('/map-items/api_get_dashboard.php');
-                    if (!response.ok) {
-                        console.error('Failed to fetch dashboard data');
-                        return false;
-                    }
-                    const data = await response.json();
+                if (updateDashboardInFlight) {
+                    return updateDashboardInFlight;
+                }
+                const requestPromise = (async () => {
+                    try {
+                        const requestHeaders = {};
+                        if (dashboardEtag) {
+                            requestHeaders['If-None-Match'] = dashboardEtag;
+                        }
+                        const response = await fetch('/map-items/api_get_dashboard.php', { headers: requestHeaders });
+                        const responseEtag = response.headers.get('ETag');
+                        if (responseEtag) {
+                            dashboardEtag = responseEtag;
+                        }
+                        if (response.status === 304) {
+                            return true;
+                        }
+                        if (!response.ok) {
+                            console.error('Failed to fetch dashboard data');
+                            return false;
+                        }
+                        const data = await response.json();
                     const health = data.system_health || {};
                     const weather = data.weather_info || {};
 
@@ -3779,11 +3851,20 @@ $total_audit_count = gb_count_audit_logs($audit_scope_panel, $audit_scope_actor)
                             clearButton.title = 'No active SOS detected.';
                         }
                     }
-                    positionSosPopup();
-                    return true;
-                } catch (error) {
-                    console.error('Error updating dashboard data:', error);
-                    return false;
+                        positionSosPopup();
+                        return true;
+                    } catch (error) {
+                        console.error('Error updating dashboard data:', error);
+                        return false;
+                    }
+                })();
+                updateDashboardInFlight = requestPromise;
+                try {
+                    return await requestPromise;
+                } finally {
+                    if (updateDashboardInFlight === requestPromise) {
+                        updateDashboardInFlight = null;
+                    }
                 }
             }
 
@@ -3797,18 +3878,49 @@ $total_audit_count = gb_count_audit_logs($audit_scope_panel, $audit_scope_actor)
                 const total = typeof data.total === 'number' ? data.total : chatCursor;
                 if (total < chatCursor) {
                     lastFetchedMessages = [];
+                    chatMessageKeys = new Set();
                     chatCursor = 0;
                     messagesChanged = true;
                 }
 
-                const messages = (data.messages || []);
+                const messages = Array.isArray(data.messages) ? data.messages : [];
                 if (messages.length > 0) {
-                    lastFetchedMessages = lastFetchedMessages.concat(messages);
-                    if (lastFetchedMessages.length > 200) {
-                        lastFetchedMessages = lastFetchedMessages.slice(-200);
+                    const incomingGatewayTexts = new Set(
+                        messages
+                            .filter((msg) => msg && msg.from === 'GATEWAY')
+                            .map((msg) => String(msg.text || ''))
+                    );
+                    if (incomingGatewayTexts.size > 0) {
+                        const beforeCount = lastFetchedMessages.length;
+                        lastFetchedMessages = lastFetchedMessages.filter((msg) => {
+                            if (!msg || !msg._optimistic || msg.from !== 'GATEWAY') return true;
+                            return !incomingGatewayTexts.has(String(msg.text || ''));
+                        });
+                        if (lastFetchedMessages.length !== beforeCount) {
+                            chatMessageKeys = new Set(lastFetchedMessages.map(getChatMessageKey).filter(Boolean));
+                            messagesChanged = true;
+                        }
+                    }
+                    const dedupedIncoming = [];
+                    for (const msg of messages) {
+                        const key = getChatMessageKey(msg);
+                        if (key && chatMessageKeys.has(key)) {
+                            continue;
+                        }
+                        if (key) {
+                            chatMessageKeys.add(key);
+                        }
+                        dedupedIncoming.push(msg);
+                    }
+                    if (dedupedIncoming.length > 0) {
+                        lastFetchedMessages = lastFetchedMessages.concat(dedupedIncoming);
+                        if (lastFetchedMessages.length > 200) {
+                            lastFetchedMessages = lastFetchedMessages.slice(-200);
+                            chatMessageKeys = new Set(lastFetchedMessages.map(getChatMessageKey).filter(Boolean));
+                        }
+                        messagesChanged = true;
                     }
                     chatCursor = total;
-                    messagesChanged = true;
                 }
 
                 if (data.subscribers_included) {
@@ -3817,14 +3929,24 @@ $total_audit_count = gb_count_audit_logs($audit_scope_panel, $audit_scope_actor)
                     } else {
                         lastFetchedSubscribers = {};
                     }
+                    subscriberNameTargets = new Set(
+                        Object.values(lastFetchedSubscribers || {})
+                            .map((user) => normalizeTagName(user?.name))
+                            .filter(Boolean)
+                    );
                     subscribersChanged = true;
                 }
 
                 if (typeof data.subscribers_mtime === 'number') {
-                    subscribersMtime = data.subscribers_mtime;
+                    chatSubscribersMtime = data.subscribers_mtime;
                 }
 
-                if (Array.isArray(data.temp_groups)) {
+                if (typeof data.temp_groups_token === 'string') {
+                    chatTempGroupsToken = data.temp_groups_token;
+                }
+
+                const groupsPayloadIncluded = data.temp_groups_included === true || (!('temp_groups_included' in data) && Array.isArray(data.temp_groups));
+                if (groupsPayloadIncluded && Array.isArray(data.temp_groups)) {
                     const nextSignature = JSON.stringify(data.temp_groups.map(group => [
                         String(group.group_name || '').toUpperCase(),
                         !!group.locked
@@ -3845,6 +3967,24 @@ $total_audit_count = gb_count_audit_logs($audit_scope_panel, $audit_scope_actor)
                 }
                 renderAllChats();
                 return true;
+            }
+
+            function getChatMessageKey(message) {
+                if (!message || typeof message !== 'object') {
+                    return '';
+                }
+                if (message._optimistic_token) {
+                    return `optimistic:${String(message._optimistic_token)}`;
+                }
+                const numericId = Number(message.id);
+                if (Number.isFinite(numericId) && numericId > 0) {
+                    return `id:${Math.trunc(numericId)}`;
+                }
+                const from = String(message.from || '');
+                const text = String(message.text || '');
+                const timestamp = String(message.timestamp || '');
+                const isDm = !!message.is_dm ? '1' : '0';
+                return `fallback:${from}|${timestamp}|${isDm}|${text}`;
             }
 
             function scheduleChatStreamRetry(delayMs = CHAT_STREAM_RETRY_MS) {
@@ -3879,7 +4019,8 @@ $total_audit_count = gb_count_audit_logs($audit_scope_panel, $audit_scope_actor)
                 const params = new URLSearchParams({
                     after: String(chatCursor),
                     with_subscribers: '1',
-                    subscribers_mtime: String(subscribersMtime),
+                    subscribers_mtime: String(chatSubscribersMtime),
+                    temp_groups_token: String(chatTempGroupsToken),
                     timeout_ms: String(CHAT_STREAM_TIMEOUT_MS)
                 });
                 const stream = new EventSource(`/map-items/api_get_chat_stream.php?${params.toString()}`);
@@ -3915,33 +4056,47 @@ $total_audit_count = gb_count_audit_logs($audit_scope_panel, $audit_scope_actor)
             }
 
             async function updateChat() {
-                try {
-                    const params = new URLSearchParams({
-                        after: chatCursor,
-                        with_subscribers: '1',
-                        subscribers_mtime: String(subscribersMtime)
-                    });
-                    const requestHeaders = {};
-                    if (chatEtag) {
-                        requestHeaders['If-None-Match'] = chatEtag;
-                    }
-                    const response = await fetch(`/map-items/api_get_chat.php?${params.toString()}`, { headers: requestHeaders });
-                    const responseEtag = response.headers.get('ETag');
-                    if (responseEtag) {
-                        chatEtag = responseEtag;
-                    }
-                    if (response.status === 304) {
-                        return true;
-                    }
-                    if (!response.ok) {
-                        console.error('Failed to fetch chat data. Status:', response.status);
+                if (updateChatInFlight) {
+                    return updateChatInFlight;
+                }
+                const requestPromise = (async () => {
+                    try {
+                        const params = new URLSearchParams({
+                            after: chatCursor,
+                            with_subscribers: '1',
+                            subscribers_mtime: String(chatSubscribersMtime),
+                            temp_groups_token: String(chatTempGroupsToken)
+                        });
+                        const requestHeaders = {};
+                        if (chatEtag) {
+                            requestHeaders['If-None-Match'] = chatEtag;
+                        }
+                        const response = await fetch(`/map-items/api_get_chat.php?${params.toString()}`, { headers: requestHeaders });
+                        const responseEtag = response.headers.get('ETag');
+                        if (responseEtag) {
+                            chatEtag = responseEtag;
+                        }
+                        if (response.status === 304) {
+                            return true;
+                        }
+                        if (!response.ok) {
+                            console.error('Failed to fetch chat data. Status:', response.status);
+                            return false;
+                        }
+                        const data = await response.json();
+                        return applyChatPayload(data);
+                    } catch (error) {
+                        console.error('Error updating chat:', error);
                         return false;
                     }
-                    const data = await response.json();
-                    return applyChatPayload(data);
-                } catch (error) {
-                    console.error('Error updating chat:', error);
-                    return false;
+                })();
+                updateChatInFlight = requestPromise;
+                try {
+                    return await requestPromise;
+                } finally {
+                    if (updateChatInFlight === requestPromise) {
+                        updateChatInFlight = null;
+                    }
                 }
             }
 
@@ -4123,6 +4278,115 @@ $total_audit_count = gb_count_audit_logs($audit_scope_panel, $audit_scope_actor)
                 return false;
             }
 
+            function setLocalUserRecord(nodeId, userData) {
+                const targetNodeId = String(nodeId || userData?.node_id || '').trim();
+                if (!targetNodeId || !userData || typeof userData !== 'object' || Array.isArray(userData)) return;
+                localUserDirectory[targetNodeId] = { ...userData, node_id: targetNodeId };
+            }
+
+            function getLocalUserRecord(nodeId) {
+                const targetNodeId = String(nodeId || '').trim();
+                if (!targetNodeId) return null;
+                const local = localUserDirectory[targetNodeId];
+                if (local && typeof local === 'object' && !Array.isArray(local)) return { ...local, node_id: targetNodeId };
+                const button = userEditButtonsByNodeId[targetNodeId] || null;
+                if (!button) return null;
+                const serialized = String(button.dataset.userData || '').trim();
+                if (!serialized) return null;
+                try {
+                    const parsed = JSON.parse(serialized);
+                    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                        const normalizedNodeId = String(parsed.node_id || targetNodeId).trim();
+                        setLocalUserRecord(normalizedNodeId, parsed);
+                        const cached = localUserDirectory[normalizedNodeId] || null;
+                        if (cached && typeof cached === 'object' && !Array.isArray(cached)) {
+                            return { ...cached, node_id: normalizedNodeId };
+                        }
+                    }
+                } catch (err) {
+                    return null;
+                }
+                return null;
+            }
+
+            function indexUserEditButtonsByNodeId() {
+                userEditButtonsByNodeId = Object.create(null);
+                document.querySelectorAll('.open-user-edit-modal').forEach((button) => {
+                    const nodeId = String(button.dataset.nodeId || '').trim();
+                    if (nodeId) {
+                        userEditButtonsByNodeId[nodeId] = button;
+                    }
+                });
+            }
+
+            function getSubscriberUserRecord(nodeId) {
+                const targetNodeId = String(nodeId || '').trim();
+                if (!targetNodeId) return null;
+                const raw = lastFetchedSubscribers[targetNodeId];
+                if (raw && typeof raw === 'object' && !Array.isArray(raw)) return { node_id: targetNodeId, ...raw };
+                return getLocalUserRecord(targetNodeId);
+            }
+
+            async function fetchUserRecord(nodeId) {
+                const targetNodeId = String(nodeId || '').trim();
+                if (!targetNodeId) return null;
+                const formData = new FormData();
+                formData.append('ajax', 'true');
+                formData.append('action', 'get_user');
+                formData.append('node_id', targetNodeId);
+                formData.append('csrf_token', csrfToken);
+                try {
+                    const response = await fetch(window.location.href, { method: 'POST', body: formData });
+                    if (!response.ok) return null;
+                    const payload = await response.json();
+                    if (!payload || !payload.success || !payload.exists || !payload.user || typeof payload.user !== 'object') {
+                        return null;
+                    }
+                    setLocalUserRecord(targetNodeId, payload.user);
+                    return getLocalUserRecord(targetNodeId);
+                } catch (error) {
+                    console.error('Failed to load user record:', error);
+                    return null;
+                }
+            }
+
+            async function ensureUserRecord(nodeId) {
+                const targetNodeId = String(nodeId || '').trim();
+                if (!targetNodeId) return null;
+                const localRecord = getSubscriberUserRecord(targetNodeId);
+                if (localRecord) return localRecord;
+                return fetchUserRecord(targetNodeId);
+            }
+
+            function openCreateUserFromDmTarget(nodeId) {
+                const targetNodeId = String(nodeId || '').trim();
+                if (!targetNodeId) return;
+                const localRecord = getLocalUserRecord(targetNodeId);
+                const targetName = String(
+                    lastFetchedSubscribers[targetNodeId]?.name ||
+                    localRecord?.name ||
+                    lastFetchedNodesById[targetNodeId]?.name ||
+                    dmChatUserBtn?.dataset?.nodeName ||
+                    targetNodeId
+                );
+                openAdminPanel('users');
+                const newNodeIdInput = document.getElementById('new_node_id');
+                const newNameInput = document.getElementById('new_name');
+                if (newNodeIdInput) {
+                    newNodeIdInput.value = targetNodeId;
+                }
+                if (newNameInput && !String(newNameInput.value || '').trim()) {
+                    newNameInput.value = targetName;
+                }
+                setTimeout(() => {
+                    if (newNameInput) {
+                        newNameInput.focus();
+                    } else if (newNodeIdInput) {
+                        newNodeIdInput.focus();
+                    }
+                }, 50);
+            }
+
             function normalizeTagName(value) {
                 return String(value || '').trim().toUpperCase();
             }
@@ -4201,6 +4465,7 @@ $total_audit_count = gb_count_audit_logs($audit_scope_panel, $audit_scope_actor)
                     button.addEventListener('click', () => {
                         selectedChatGroup = String(button.dataset.chatGroup || '').toUpperCase();
                         renderChatGroupTabs();
+                        renderFilteredChat();
                     });
                 });
 
@@ -4233,7 +4498,110 @@ $total_audit_count = gb_count_audit_logs($audit_scope_panel, $audit_scope_actor)
                 if (/^![A-F0-9]{8}$/i.test(target)) {
                     return true;
                 }
-                return Object.values(lastFetchedSubscribers || {}).some((user) => normalizeTagName(user?.name) === target);
+                return subscriberNameTargets.has(target);
+            }
+
+            function getMessageMentionTarget(text) {
+                const clean = String(text || '').replace(/^\x07/, '').trim();
+                if (!clean.startsWith('@')) {
+                    return '';
+                }
+                return normalizeTagName(clean.split(/\s+/, 1)[0].slice(1));
+            }
+
+            function getMessageBracketGroupTarget(text) {
+                const clean = String(text || '').replace(/^\x07/, '').trim();
+                const match = clean.match(/^\[([^\]]+)\]/);
+                if (!match) {
+                    return '';
+                }
+                return normalizeTagName(match[1]);
+            }
+
+            function findNodeIdByMentionTarget(target) {
+                const normalizedTarget = normalizeTagName(target);
+                if (!normalizedTarget) {
+                    return '';
+                }
+                const allCandidates = Object.assign({}, localUserDirectory || {}, lastFetchedSubscribers || {});
+                for (const [nodeId, userData] of Object.entries(allCandidates)) {
+                    if (normalizeTagName(nodeId) === normalizedTarget) {
+                        return nodeId;
+                    }
+                    if (normalizeTagName(userData?.name) === normalizedTarget) {
+                        return nodeId;
+                    }
+                }
+                return '';
+            }
+
+            function nodeBelongsToChatGroup(nodeId, groupName) {
+                const normalizedGroup = normalizeTagName(groupName);
+                const rawNodeId = String(nodeId || '').trim();
+                if (!normalizedGroup || !rawNodeId) {
+                    return false;
+                }
+                let targetNodeId = rawNodeId;
+                let userData = lastFetchedSubscribers[targetNodeId] || getLocalUserRecord(targetNodeId) || null;
+                if (!userData) {
+                    const normalizedNodeId = normalizeTagName(rawNodeId);
+                    const allCandidates = Object.assign({}, localUserDirectory || {}, lastFetchedSubscribers || {});
+                    const matchedNodeId = Object.keys(allCandidates).find((candidateId) => normalizeTagName(candidateId) === normalizedNodeId);
+                    if (matchedNodeId) {
+                        targetNodeId = matchedNodeId;
+                        userData = allCandidates[matchedNodeId] || null;
+                    }
+                }
+                userData = userData || {};
+                const userTags = Array.isArray(userData.tags) ? userData.tags : [];
+                if (userTags.some((tag) => normalizeTagName(tag) === normalizedGroup)) {
+                    return true;
+                }
+                const normalizedNode = normalizeTagName(targetNodeId);
+                const normalizedName = normalizeTagName(userData?.name);
+                for (const group of (Array.isArray(lastFetchedTempGroups) ? lastFetchedTempGroups : [])) {
+                    if (normalizeTagName(group?.group_name) !== normalizedGroup) {
+                        continue;
+                    }
+                    const members = Array.isArray(group?.members) ? group.members : [];
+                    for (const member of members) {
+                        const normalizedMember = normalizeTagName(member);
+                        if (!normalizedMember) {
+                            continue;
+                        }
+                        if (normalizedMember === normalizedNode || (normalizedName && normalizedMember === normalizedName)) {
+                            return true;
+                        }
+                    }
+                }
+                return false;
+            }
+
+            function messageBelongsToSelectedGroup(msg, groupName) {
+                const normalizedGroup = normalizeTagName(groupName);
+                if (!normalizedGroup || normalizedGroup === CHAT_GROUP_CHANNEL) {
+                    return true;
+                }
+                const text = String(msg?.text || '');
+                const mentionTarget = getMessageMentionTarget(text);
+                const bracketTarget = getMessageBracketGroupTarget(text);
+                const fromId = String(msg?.from || '').trim();
+
+                if (fromId === 'GATEWAY') {
+                    if (mentionTarget === normalizedGroup || bracketTarget === normalizedGroup) {
+                        return true;
+                    }
+                    if (!mentionTarget) {
+                        return false;
+                    }
+                    const targetNodeId = findNodeIdByMentionTarget(mentionTarget);
+                    return targetNodeId ? nodeBelongsToChatGroup(targetNodeId, normalizedGroup) : false;
+                }
+
+                if (mentionTarget === normalizedGroup || bracketTarget === normalizedGroup) {
+                    return true;
+                }
+                return nodeBelongsToChatGroup(fromId, normalizedGroup);
             }
 
             function renderFilteredChat() {
@@ -4242,6 +4610,8 @@ $total_audit_count = gb_count_audit_logs($audit_scope_panel, $audit_scope_actor)
                 if (!chatContainerElement || !chatWindow) return;
                 const showDMs = document.getElementById('show-dms-checkbox')?.checked ?? false;
                 const showSMs = document.getElementById('show-sms-checkbox')?.checked ?? false;
+                const activeGroup = normalizeTagName(selectedChatGroup);
+                const enforceGroupFilter = !!activeGroup && activeGroup !== CHAT_GROUP_CHANNEL;
                 const isScrolledToBottom = chatWindow.scrollHeight - chatWindow.clientHeight <= chatWindow.scrollTop + 10;
                 const filteredMessages = lastFetchedMessages.filter(msg => {
                     const text = (msg.text || '').trim();
@@ -4254,13 +4624,13 @@ $total_audit_count = gb_count_audit_logs($audit_scope_panel, $audit_scope_actor)
                     }
                     if (isServerMessage) return showSMs;
                     const isConsideredDM = msg.is_dm || (msg.from === 'GATEWAY' && isOutgoingDirectMessage(text));
+                    if (enforceGroupFilter && !messageBelongsToSelectedGroup(msg, activeGroup)) return false;
                     if (isConsideredDM) return showDMs;
                     return true;
                 });
 
-                chatContainerElement.innerHTML = '';
                 if (filteredMessages.length > 0) {
-                    filteredMessages.forEach(msg => { chatContainerElement.innerHTML += createMessageHTML(msg, lastFetchedSubscribers, false); });
+                    chatContainerElement.innerHTML = filteredMessages.map((msg) => createMessageHTML(msg, lastFetchedSubscribers, false)).join('');
                 } else {
                     chatContainerElement.innerHTML = '<div class="placeholder">No messages to display with current filters.</div>';
                 }
@@ -4282,6 +4652,10 @@ $total_audit_count = gb_count_audit_logs($audit_scope_panel, $audit_scope_actor)
                     if (dmChatInfoBtn) {
                         dmChatInfoBtn.dataset.nodeId = '';
                         dmChatInfoBtn.disabled = true;
+                    }
+                    if (dmChatUserBtn) {
+                        dmChatUserBtn.dataset.nodeId = '';
+                        dmChatUserBtn.disabled = true;
                     }
                     return;
                 }
@@ -4311,6 +4685,16 @@ $total_audit_count = gb_count_audit_logs($audit_scope_panel, $audit_scope_actor)
                     dmChatInfoBtn.dataset.nodeId = targetNodeId;
                     dmChatInfoBtn.disabled = false;
                 }
+                if (dmChatUserBtn) {
+                    const fallbackName = String(
+                        lastFetchedSubscribers[targetNodeId]?.name ||
+                        lastFetchedNodesById[targetNodeId]?.name ||
+                        targetNodeId
+                    );
+                    dmChatUserBtn.dataset.nodeId = targetNodeId;
+                    dmChatUserBtn.dataset.nodeName = fallbackName;
+                    dmChatUserBtn.disabled = false;
+                }
                 const targetName = lastFetchedSubscribers[targetNodeId]?.name || targetNodeId;
                 const filteredMessages = lastFetchedMessages.filter(msg => {
                     const gatewayToUserRegex = new RegExp(`^@${escapeRegExp(targetName)}\\s`, 'i');
@@ -4319,9 +4703,8 @@ $total_audit_count = gb_count_audit_logs($audit_scope_panel, $audit_scope_actor)
                     return fromUserToGateway || fromGatewayToUser;
                 });
                 const isScrolledToBottom = dmChatWindow.scrollHeight - dmChatWindow.clientHeight <= dmChatWindow.scrollTop + 10;
-                dmChatContainer.innerHTML = '';
                 if (filteredMessages.length > 0) {
-                    filteredMessages.forEach(msg => { dmChatContainer.innerHTML += createMessageHTML(msg, lastFetchedSubscribers, true); });
+                    dmChatContainer.innerHTML = filteredMessages.map((msg) => createMessageHTML(msg, lastFetchedSubscribers, true)).join('');
                 } else {
                     dmChatContainer.innerHTML = '<div class="placeholder">No direct messages with this user yet.</div>';
                 }
@@ -4368,9 +4751,23 @@ $total_audit_count = gb_count_audit_logs($audit_scope_panel, $audit_scope_actor)
                     dmChatInfoBtn.dataset.nodeId = nodeId;
                     dmChatInfoBtn.disabled = false;
                 }
+                if (dmChatUserBtn) {
+                    const fallbackName = String(
+                        lastFetchedSubscribers[nodeId]?.name ||
+                        lastFetchedNodesById[nodeId]?.name ||
+                        nodeName ||
+                        nodeId
+                    );
+                    dmChatUserBtn.dataset.nodeId = nodeId;
+                    dmChatUserBtn.dataset.nodeName = fallbackName;
+                    dmChatUserBtn.disabled = false;
+                }
                 dmTargetNodeIdInput.value = nodeId;
                 dmModal.style.display = 'flex';
                 document.body.style.overflow = 'hidden';
+                if (!isChatPolling) {
+                    startChatPolling();
+                }
                 updateChat();
                 renderDmChat();
                 setTimeout(() => {
@@ -4399,6 +4796,56 @@ $total_audit_count = gb_count_audit_logs($audit_scope_panel, $audit_scope_actor)
                     dmChatInfoBtn.dataset.nodeId = '';
                     dmChatInfoBtn.disabled = true;
                 }
+                if (dmChatUserBtn) {
+                    dmChatUserBtn.dataset.nodeId = '';
+                    dmChatUserBtn.dataset.nodeName = '';
+                    dmChatUserBtn.disabled = true;
+                }
+            }
+
+            function formatOptimisticChatTimestamp() {
+                const now = new Date();
+                const hh = String(now.getHours()).padStart(2, '0');
+                const mm = String(now.getMinutes()).padStart(2, '0');
+                const month = String(now.getMonth() + 1).padStart(2, '0');
+                const day = String(now.getDate()).padStart(2, '0');
+                return `${hh}:${mm} ${month}/${day}`;
+            }
+
+            function addOptimisticGatewayMessage(messageText) {
+                const text = String(messageText || '');
+                if (!text.trim()) return '';
+                const optimisticToken = `gw-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+                const optimisticMessage = {
+                    from: 'GATEWAY',
+                    text,
+                    timestamp: formatOptimisticChatTimestamp(),
+                    is_dm: false,
+                    _optimistic: true,
+                    _optimistic_token: optimisticToken
+                };
+                const key = getChatMessageKey(optimisticMessage);
+                if (key) {
+                    chatMessageKeys.add(key);
+                }
+                lastFetchedMessages = lastFetchedMessages.concat(optimisticMessage);
+                if (lastFetchedMessages.length > 200) {
+                    lastFetchedMessages = lastFetchedMessages.slice(-200);
+                    chatMessageKeys = new Set(lastFetchedMessages.map(getChatMessageKey).filter(Boolean));
+                }
+                renderAllChats();
+                return optimisticToken;
+            }
+
+            function removeOptimisticGatewayMessage(optimisticToken) {
+                const token = String(optimisticToken || '').trim();
+                if (!token) return;
+                const beforeCount = lastFetchedMessages.length;
+                lastFetchedMessages = lastFetchedMessages.filter((msg) => String(msg?._optimistic_token || '') !== token);
+                if (lastFetchedMessages.length !== beforeCount) {
+                    chatMessageKeys = new Set(lastFetchedMessages.map(getChatMessageKey).filter(Boolean));
+                    renderAllChats();
+                }
             }
 
             function sendAjaxMessage(text, button, isBell = false) {
@@ -4411,8 +4858,10 @@ $total_audit_count = gb_count_audit_logs($audit_scope_panel, $audit_scope_actor)
                 const isDmContext = !!button.closest('#dm-chat-form');
                 let routedText = text;
                 const trimmed = text.trim();
+                let forcedTargetGroup = '';
                 if (!isDmContext && !trimmed.startsWith('@')) {
                     if (selectedChatGroup && selectedChatGroup !== CHAT_GROUP_CHANNEL) {
+                        forcedTargetGroup = normalizeTagName(selectedChatGroup);
                         routedText = `@${selectedChatGroup} ${trimmed}`;
                     } else {
                         routedText = trimmed;
@@ -4437,11 +4886,15 @@ $total_audit_count = gb_count_audit_logs($audit_scope_panel, $audit_scope_actor)
                         messageToSend = `\x07${routedTrimmed}`;
                     }
                 }
+                const optimisticToken = addOptimisticGatewayMessage(messageToSend);
 
                 const formData = new FormData();
                 formData.append('ajax', 'true');
                 formData.append('action', 'send_broadcast');
                 formData.append('broadcast_text', messageToSend);
+                if (forcedTargetGroup) {
+                    formData.append('target_group', forcedTargetGroup);
+                }
                 formData.append('csrf_token', csrfToken);
 
                 fetch(window.location.href, { method: 'POST', body: formData })
@@ -4453,12 +4906,14 @@ $total_audit_count = gb_count_audit_logs($audit_scope_panel, $audit_scope_actor)
                             } else {
                                 mainChatTextarea.value = '';
                             }
-                            setTimeout(() => updateChat(), 500);
+                            void updateChat();
                         } else {
+                            removeOptimisticGatewayMessage(optimisticToken);
                             alert('Failed to send message: ' + data.message);
                         }
                     })
                     .catch(error => {
+                        removeOptimisticGatewayMessage(optimisticToken);
                         console.error('Error sending message:', error);
                         alert('An error occurred while sending the message.');
                     })
@@ -4710,6 +5165,7 @@ $total_audit_count = gb_count_audit_logs($audit_scope_panel, $audit_scope_actor)
             const dmChatBellBtn = document.getElementById('dm-chat-bell-btn');
             const dmChatMapBtn = document.getElementById('dm-chat-map-btn');
             const dmChatInfoBtn = document.getElementById('dm-chat-info-btn');
+            const dmChatUserBtn = document.getElementById('dm-chat-user-btn');
             const mainChatTextarea = document.getElementById('main-chat-textarea');
             const mainChatSendBtn = document.getElementById('main-chat-send-btn');
             const mainChatBellBtn = document.getElementById('main-chat-bell-btn');
@@ -4767,6 +5223,7 @@ $total_audit_count = gb_count_audit_logs($audit_scope_panel, $audit_scope_actor)
 
             function openUserEditModal(userData) {
                 if (!userEditModal || !userEditForm) return;
+                setLocalUserRecord(userData?.node_id, userData);
                 if (userModalTitle) userModalTitle.textContent = `${userData.node_id} / ${userData.name || userData.node_id}`;
                 userEditForm.querySelector('input[name="node_id"]').value = userData.node_id;
                 userEditForm.querySelector('input[name="name"]').value = userData.name || '';
@@ -4920,6 +5377,168 @@ $total_audit_count = gb_count_audit_logs($audit_scope_panel, $audit_scope_actor)
                 }
             }
 
+            function renderMopUsersTable(usersPayload) {
+                const tbody = document.getElementById('mop-users-table-body');
+                if (!tbody) return;
+                const rows = Array.isArray(usersPayload?.rows) ? usersPayload.rows : [];
+                if (rows.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="7" class="status-muted">No subscribers found.</td></tr>';
+                    indexUserEditButtonsByNodeId();
+                    return;
+                }
+                tbody.innerHTML = rows.map((row) => {
+                    const nodeId = String(row?.node_id || '').trim();
+                    const name = String(row?.name || '');
+                    const fullName = String(row?.full_name || '');
+                    const phone1 = String(row?.phone_1 || '');
+                    const assignedRole = String(row?.assigned_role || '');
+                    const reportedRole = String(row?.reported_role || 'Unknown');
+                    const roleClass = reportedRole === 'Unknown'
+                        ? 'status-muted'
+                        : (row?.reported_role_matches ? 'status-ok' : 'status-warn');
+                    const tags = Array.isArray(row?.tags) ? row.tags.filter(Boolean).join(', ') : '';
+                    const displayName = name || nodeId;
+                    return `
+                        <tr>
+                            <td class="font-mono">
+                                <button type="button" class="open-dm-chat" data-node-id="${escapeHTML(nodeId)}" data-node-name="${escapeHTML(displayName)}">${escapeHTML(nodeId)}</button>
+                            </td>
+                            <td>${escapeHTML(name)}</td>
+                            <td>
+                                <div class="role-pill ${roleClass}">${escapeHTML(reportedRole)}</div>
+                                <div>${escapeHTML(assignedRole)}</div>
+                            </td>
+                            <td>${escapeHTML(fullName)}</td>
+                            <td>${escapeHTML(phone1)}</td>
+                            <td class="status-muted">${escapeHTML(tags || '\u2014')}</td>
+                            <td><button type="button" class="btn btn-secondary open-user-edit-modal" data-node-id="${escapeHTML(nodeId)}">More...</button></td>
+                        </tr>
+                    `;
+                }).join('');
+                indexUserEditButtonsByNodeId();
+            }
+
+            function renderMopBroadcastsTable(broadcastPayload) {
+                const tbody = document.getElementById('mop-broadcasts-table-body');
+                if (!tbody) return;
+                const jobs = Array.isArray(broadcastPayload?.jobs) ? broadcastPayload.jobs : [];
+                if (jobs.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="6" class="status-muted">No custom broadcast jobs found.</td></tr>';
+                    return;
+                }
+                const dayOrder = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
+                tbody.innerHTML = jobs.map((job) => {
+                    const enabled = !!job?.enabled;
+                    const name = String(job?.name || 'N/A');
+                    const intervalMins = String(job?.interval_mins ?? 'N/A');
+                    const days = Array.isArray(job?.days) ? job.days.map((d) => String(d || '').toUpperCase()) : null;
+                    const daysHtml = Array.isArray(days)
+                        ? dayOrder.map((day) => {
+                            const isActive = days.includes(day);
+                            return `<span style="color:${isActive ? '#60a5fa' : '#52525b'};">${day.slice(0, 1)}</span>`;
+                        }).join(' ')
+                        : '<span class="status-muted">Event</span>';
+                    const windowText = (job?.start_datetime || job?.stop_datetime)
+                        ? `${String(job?.start_datetime || '')} to ${String(job?.stop_datetime || '')}`
+                        : `${String(job?.start_time || 'N/A')} - ${String(job?.stop_time || 'N/A')}`;
+                    const serialized = escapeHTML(JSON.stringify(job || {}));
+                    return `
+                        <tr>
+                            <td>${enabled ? 'Enabled' : 'Disabled'}</td>
+                            <td>${escapeHTML(name)}</td>
+                            <td>${daysHtml}</td>
+                            <td>${escapeHTML(intervalMins)} mins</td>
+                            <td>${escapeHTML(windowText)}</td>
+                            <td><button type="button" class="btn btn-secondary open-broadcast-edit-modal" data-job-data="${serialized}">More...</button></td>
+                        </tr>
+                    `;
+                }).join('');
+            }
+
+            async function fetchMopAdminTables(scope, forceFresh = false) {
+                const normalizedScope = String(scope || '').trim().toLowerCase();
+                if (normalizedScope !== 'users' && normalizedScope !== 'broadcasts') {
+                    return false;
+                }
+                const etagRef = normalizedScope === 'users' ? adminUsersTableEtag : adminBroadcastsTableEtag;
+                const requestHeaders = {};
+                if (!forceFresh && etagRef) {
+                    requestHeaders['If-None-Match'] = etagRef;
+                }
+                const response = await fetch(`/map-items/api_get_admin_tables.php?scope=${encodeURIComponent(normalizedScope)}`, { headers: requestHeaders });
+                const responseEtag = response.headers.get('ETag');
+                if (responseEtag) {
+                    if (normalizedScope === 'users') {
+                        adminUsersTableEtag = responseEtag;
+                    } else {
+                        adminBroadcastsTableEtag = responseEtag;
+                    }
+                }
+                if (response.status === 304) {
+                    return true;
+                }
+                if (!response.ok) {
+                    if (normalizedScope === 'users') {
+                        const tbody = document.getElementById('mop-users-table-body');
+                        if (tbody) {
+                            tbody.innerHTML = '<tr><td colspan="7" class="status-muted">Failed to load subscribers.</td></tr>';
+                        }
+                    } else {
+                        const tbody = document.getElementById('mop-broadcasts-table-body');
+                        if (tbody) {
+                            tbody.innerHTML = '<tr><td colspan="6" class="status-muted">Failed to load broadcasts.</td></tr>';
+                        }
+                    }
+                    return false;
+                }
+                const payload = await response.json();
+                if (normalizedScope === 'users') {
+                    if (payload?.users?.directory && typeof payload.users.directory === 'object') {
+                        localUserDirectory = Object.assign(Object.create(null), localUserDirectory || {}, payload.users.directory || {});
+                    }
+                    renderMopUsersTable(payload?.users || null);
+                } else {
+                    renderMopBroadcastsTable(payload?.broadcasts || null);
+                }
+                return true;
+            }
+
+            function ensureMopUsersTableLoaded(forceFresh = false) {
+                if (adminUsersFetchInFlight) {
+                    return adminUsersFetchInFlight;
+                }
+                const requestPromise = fetchMopAdminTables('users', forceFresh)
+                    .catch((error) => {
+                        console.error('Failed to load users table:', error);
+                        return false;
+                    })
+                    .finally(() => {
+                        if (adminUsersFetchInFlight === requestPromise) {
+                            adminUsersFetchInFlight = null;
+                        }
+                    });
+                adminUsersFetchInFlight = requestPromise;
+                return requestPromise;
+            }
+
+            function ensureMopBroadcastsTableLoaded(forceFresh = false) {
+                if (adminBroadcastsFetchInFlight) {
+                    return adminBroadcastsFetchInFlight;
+                }
+                const requestPromise = fetchMopAdminTables('broadcasts', forceFresh)
+                    .catch((error) => {
+                        console.error('Failed to load broadcasts table:', error);
+                        return false;
+                    })
+                    .finally(() => {
+                        if (adminBroadcastsFetchInFlight === requestPromise) {
+                            adminBroadcastsFetchInFlight = null;
+                        }
+                    });
+                adminBroadcastsFetchInFlight = requestPromise;
+                return requestPromise;
+            }
+
             function openAdminPanel(tab) {
                 const modalMap = {
                     chat: 'modal-chat',
@@ -4930,11 +5549,21 @@ $total_audit_count = gb_count_audit_logs($audit_scope_panel, $audit_scope_actor)
                 const modalId = modalMap[tab] || 'modal-actions';
                 openModal(modalId);
                 if (tab === 'chat') {
+                    if (!isChatPolling) {
+                        startChatPolling();
+                    }
+                    renderChatGroupTabs();
                     renderFilteredChat();
                     updateChat();
                 }
                 if (tab === 'actions') {
                     fetchBlocklist();
+                }
+                if (tab === 'users') {
+                    void ensureMopUsersTableLoaded(false);
+                }
+                if (tab === 'broadcasts') {
+                    void ensureMopBroadcastsTableLoaded(false);
                 }
             }
 
@@ -5021,12 +5650,26 @@ $total_audit_count = gb_count_audit_logs($audit_scope_panel, $audit_scope_actor)
                     scheduleStatusPoll(POLLING_INTERVAL);
                     return;
                 }
-                const okNodes = await updatePageData();
-                const okDash = await updateDashboardData();
+                if (statusPollInFlight) {
+                    scheduleStatusPoll(statusBackoffMs || POLLING_INTERVAL);
+                    return;
+                }
+                statusPollInFlight = true;
+                let okNodes = false;
+                let okDash = false;
+                try {
+                    okNodes = await updatePageData();
+                    okDash = await updateDashboardData();
+                } finally {
+                    statusPollInFlight = false;
+                }
                 if (okNodes && okDash) {
                     statusBackoffMs = POLLING_INTERVAL;
                 } else {
                     statusBackoffMs = Math.min(MAX_BACKOFF_MS, Math.max(POLLING_INTERVAL, statusBackoffMs * 2));
+                }
+                if (!isStatusPolling) {
+                    return;
                 }
                 scheduleStatusPoll(statusBackoffMs);
             }
@@ -5038,19 +5681,31 @@ $total_audit_count = gb_count_audit_logs($audit_scope_panel, $audit_scope_actor)
                     scheduleChatPoll(CHAT_POLLING_INTERVAL);
                     return;
                 }
+                if (chatPollInFlight) {
+                    scheduleChatPoll(chatBackoffMs || CHAT_POLLING_INTERVAL);
+                    return;
+                }
+                chatPollInFlight = true;
                 let okChat = true;
-                if (CHAT_STREAM_ENABLED) {
-                    if (!chatStreamSource && !chatStreamRetryTimer) {
-                        startChatStream();
+                try {
+                    if (CHAT_STREAM_ENABLED) {
+                        if (!chatStreamSource && !chatStreamRetryTimer) {
+                            startChatStream();
+                        }
+                        okChat = true;
+                    } else {
+                        okChat = await updateChat();
                     }
-                    okChat = true;
-                } else {
-                    okChat = await updateChat();
+                } finally {
+                    chatPollInFlight = false;
                 }
                 if (okChat) {
                     chatBackoffMs = CHAT_POLLING_INTERVAL;
                 } else {
                     chatBackoffMs = Math.min(MAX_BACKOFF_MS, Math.max(CHAT_POLLING_INTERVAL, chatBackoffMs * 2));
+                }
+                if (!isChatPolling) {
+                    return;
                 }
                 scheduleChatPoll(chatBackoffMs);
             }
@@ -5093,20 +5748,36 @@ $total_audit_count = gb_count_audit_logs($audit_scope_panel, $audit_scope_actor)
                 }
             });
 
-            document.querySelectorAll('.open-user-edit-modal').forEach(button => {
-                button.addEventListener('click', function() {
-                    openUserEditModal(JSON.parse(this.dataset.userData));
-                });
+            indexUserEditButtonsByNodeId();
+            document.body.addEventListener('click', async (event) => {
+                const button = event.target.closest('.open-user-edit-modal');
+                if (!button) return;
+                const nodeId = String(button.dataset.nodeId || '').trim();
+                if (!nodeId) return;
+                let userData = getLocalUserRecord(nodeId);
+                if (!userData) {
+                    userData = await fetchUserRecord(nodeId);
+                }
+                if (!userData) {
+                    alert(`Unable to load user profile for ${nodeId}.`);
+                    return;
+                }
+                openUserEditModal(userData);
             });
             addressLatInput?.addEventListener('input', updateAddressCoordToggle);
             addressLonInput?.addEventListener('input', updateAddressCoordToggle);
             closeUserModalBtnHeader?.addEventListener('click', closeUserEditModal);
             closeUserModalBtnFooter?.addEventListener('click', closeUserEditModal);
 
-            document.querySelectorAll('.open-broadcast-edit-modal').forEach(button => {
-                button.addEventListener('click', function() {
-                    openBroadcastEditModal(JSON.parse(this.dataset.jobData));
-                });
+            document.body.addEventListener('click', (event) => {
+                const button = event.target.closest('.open-broadcast-edit-modal');
+                if (!button) return;
+                try {
+                    const jobData = JSON.parse(String(button.dataset.jobData || '{}'));
+                    openBroadcastEditModal(jobData);
+                } catch (error) {
+                    console.error('Invalid broadcast job payload:', error);
+                }
             });
             closeBroadcastModalBtnHeader?.addEventListener('click', closeBroadcastEditModal);
             closeBroadcastModalBtnFooter?.addEventListener('click', closeBroadcastEditModal);
@@ -5127,6 +5798,16 @@ $total_audit_count = gb_count_audit_logs($audit_scope_panel, $audit_scope_actor)
                 const nodeId = dmChatInfoBtn.dataset.nodeId || dmTargetNodeIdInput?.value || '';
                 if (!nodeId) return;
                 openUserInfoPopup(nodeId);
+            });
+            dmChatUserBtn?.addEventListener('click', async () => {
+                const nodeId = dmChatUserBtn.dataset.nodeId || dmTargetNodeIdInput?.value || '';
+                const userRecord = await ensureUserRecord(nodeId);
+                closeDmChat();
+                if (userRecord) {
+                    openUserEditModal(userRecord);
+                    return;
+                }
+                openCreateUserFromDmTarget(nodeId);
             });
 
             const clearEmailQueueForm = document.getElementById('clear-email-queue-form');
@@ -5295,10 +5976,7 @@ $total_audit_count = gb_count_audit_logs($audit_scope_panel, $audit_scope_actor)
 
             initModals();
             initMap();
-            updatePageData();
-            updateDashboardData();
             startStatusPolling();
-            startChatPolling();
             setInterval(refreshNodeAges, 30000);
         });
     </script>

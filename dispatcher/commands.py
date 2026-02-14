@@ -115,6 +115,38 @@ def _is_known_permanent_tag(tag_name: str) -> bool:
     return False
 
 
+def _flag_enabled(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    text = str(value or "").strip().lower()
+    return text in {"1", "true", "yes", "on"}
+
+
+def _get_sender_subscriber_record(sender_id: str) -> dict[str, Any]:
+    sender = str(sender_id or "").strip()
+    if not sender:
+        return {}
+    with core.subscribers_lock:
+        direct = core.subscribers.get(sender)
+        if isinstance(direct, dict):
+            return direct
+        sender_upper = sender.upper()
+        for node_id, sub_data in core.subscribers.items():
+            if str(node_id).upper() == sender_upper and isinstance(sub_data, dict):
+                return sub_data
+    subscribers = gb_db.load_subscribers_dict() or {}
+    direct = subscribers.get(sender)
+    if isinstance(direct, dict):
+        return direct
+    sender_upper = sender.upper()
+    for node_id, sub_data in subscribers.items():
+        if str(node_id).upper() == sender_upper and isinstance(sub_data, dict):
+            return sub_data
+    return {}
+
+
 def _is_temp_group_name(group_name: str) -> bool:
     return gb_db.get_temp_group(group_name) is not None
 
@@ -348,10 +380,9 @@ def _cmd_send_email(sender: str, args: str):
 def _cmd_tagsend(sender: str, args: str):
     cleanup_expired_temp_groups()
 
-    with core.subscribers_lock:
-        sender_data = core.subscribers.get(sender, {})
-        sender_name = sender_data.get("name", sender)
-        can_send_static_tags = bool(sender_data.get("node_tag_send", False))
+    sender_data = _get_sender_subscriber_record(sender)
+    sender_name = sender_data.get("name", sender)
+    can_send_static_tags = _flag_enabled(sender_data.get("node_tag_send", False))
 
     with core.subscribers_lock:
         blocked_map = {
@@ -425,8 +456,14 @@ def _cmd_tagsend(sender: str, args: str):
         return f"No users found with tags: {', '.join(target_tags)}"
 
     formatted_message = f"[{', '.join(target_tags)}] {sender_name}\n{message}"
+    primary_tag = target_tags[0] if target_tags else "TAG"
+    if isinstance(message, str) and message.startswith("\x07"):
+        log_text = "\x07@" + primary_tag + " " + message[1:]
+    else:
+        log_text = f"@{primary_tag} {message}"
+    core.log_channel_message(sender, log_text, is_dm=False)
     for recipient_id in recipient_ids:
-        send_meshtastic_message(formatted_message, destinationId=recipient_id)
+        send_meshtastic_message(formatted_message, destinationId=recipient_id, suppress_log=True)
     if locked_temp_tags:
         return f"Message sent. Skipped locked temporary group(s): {', '.join(sorted(locked_temp_tags))}."
     return None
@@ -913,6 +950,19 @@ def _execute_command_payload(command_data: dict[str, Any], source_file: str) -> 
             _raise_command_payload("Missing 'tags' or 'text' for tagsend command.", details={"command": cmd})
         target_tags = [t.strip().upper() for t in tags.split(",")] if isinstance(tags, str) else tags
         target_tags = [t for t in target_tags if isinstance(t, str) and t.strip()]
+        primary_tag = target_tags[0] if target_tags else "TAG"
+        text_body = str(text)
+        has_bell = text_body.startswith("\x07")
+        if has_bell:
+            text_body = text_body[1:]
+        recipient_text = f"[{primary_tag}] {text_body}"
+        if has_bell:
+            recipient_text = "\x07" + recipient_text
+        if has_bell:
+            log_text = "\x07@" + primary_tag + " " + text_body
+        else:
+            log_text = f"@{primary_tag} {text_body}"
+        core.log_channel_message("GATEWAY", log_text, is_dm=False)
         subscribers = gb_db.load_subscribers_dict() or {}
         recipient_ids = {
             node_id
@@ -935,7 +985,7 @@ def _execute_command_payload(command_data: dict[str, Any], source_file: str) -> 
         if recipient_ids:
             logging.info(f"Tag-based send to {len(recipient_ids)} recipients for tags: {target_tags}")
             for r_id in recipient_ids:
-                send_meshtastic_message(text, destinationId=r_id, wantAck=True)
+                send_meshtastic_message(recipient_text, destinationId=r_id, wantAck=True, suppress_log=True)
             processed_details["recipient_count"] = len(recipient_ids)
         else:
             logging.warning(f"No subscribers found for tags {target_tags}. Message not sent.")

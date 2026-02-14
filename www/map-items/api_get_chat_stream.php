@@ -35,19 +35,13 @@ function gb_emit_sse($event, $payload) {
     @flush();
 }
 
-function gb_temp_group_sig($groups) {
-    if (!is_array($groups) || empty($groups)) {
-        return '';
-    }
-    return hash('sha256', json_encode($groups));
-}
-
 $after = isset($_GET['after']) ? intval($_GET['after']) : 0;
 if ($after < 0) {
     $after = 0;
 }
 $with_subscribers = isset($_GET['with_subscribers']) ? intval($_GET['with_subscribers']) : 1;
 $client_subs_mtime = isset($_GET['subscribers_mtime']) ? intval($_GET['subscribers_mtime']) : 0;
+$client_temp_groups_token = trim((string)($_GET['temp_groups_token'] ?? ''));
 $timeout_ms = isset($_GET['timeout_ms']) ? intval($_GET['timeout_ms']) : 20000;
 $poll_ms = isset($_GET['poll_ms']) ? intval($_GET['poll_ms']) : 500;
 
@@ -55,10 +49,10 @@ $timeout_ms = max(3000, min(30000, $timeout_ms));
 $poll_ms = max(150, min(2000, $poll_ms));
 
 $started = microtime(true);
-$baseline_group_sig = null;
 $last_id = $after;
 $subs_mtime = gb_get_subscribers_mtime();
 $temp_groups = [];
+$temp_groups_token = gb_get_temp_groups_token();
 
 while (true) {
     if (connection_aborted()) {
@@ -81,13 +75,13 @@ while (true) {
         }
     }
 
-    $temp_groups = gb_load_temp_groups();
-    $group_sig = gb_temp_group_sig($temp_groups);
-    if ($baseline_group_sig === null) {
-        $baseline_group_sig = $group_sig;
+    $temp_groups_token = gb_get_temp_groups_token();
+    $groups_changed = ($client_temp_groups_token !== $temp_groups_token);
+    if ($groups_changed) {
+        $temp_groups = gb_load_temp_groups();
+    } else {
+        $temp_groups = [];
     }
-
-    $groups_changed = ($group_sig !== $baseline_group_sig);
     $chat_reset = ($last_id < $after);
     $has_updates = (!empty($messages) || $include_subscribers || $groups_changed || $chat_reset);
 
@@ -98,7 +92,9 @@ while (true) {
             'subscribers' => $subscribers,
             'subscribers_included' => $include_subscribers,
             'subscribers_mtime' => $subs_mtime,
-            'temp_groups' => $temp_groups
+            'temp_groups' => $temp_groups,
+            'temp_groups_included' => $groups_changed,
+            'temp_groups_token' => $temp_groups_token
         ]);
         exit;
     }
@@ -117,7 +113,9 @@ gb_emit_sse('heartbeat', [
     'subscribers' => [],
     'subscribers_included' => false,
     'subscribers_mtime' => $subs_mtime,
-    'temp_groups' => $temp_groups
+    'temp_groups' => [],
+    'temp_groups_included' => false,
+    'temp_groups_token' => $temp_groups_token
 ]);
 exit;
 

@@ -49,6 +49,9 @@ function gb_init_db(PDO $pdo) {
     $pdo->exec('CREATE INDEX IF NOT EXISTS idx_command_jobs_updated_at ON command_jobs(updated_at)');
     $pdo->exec('CREATE TABLE IF NOT EXISTS audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at INTEGER NOT NULL, actor TEXT NOT NULL, panel TEXT NOT NULL, action TEXT NOT NULL, target TEXT NOT NULL DEFAULT \'\', details_json TEXT NOT NULL DEFAULT \'{}\')');
     $pdo->exec('CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log(created_at DESC)');
+    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_audit_log_panel_actor_id ON audit_log(panel, actor, id DESC)');
+    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_audit_log_panel_id ON audit_log(panel, id DESC)');
+    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_audit_log_actor_id ON audit_log(actor, id DESC)');
     $pdo->exec('CREATE TABLE IF NOT EXISTS login_failures (id INTEGER PRIMARY KEY AUTOINCREMENT, panel TEXT NOT NULL, principal TEXT NOT NULL, remote_addr TEXT NOT NULL, created_at INTEGER NOT NULL)');
     $pdo->exec('CREATE INDEX IF NOT EXISTS idx_login_failures_lookup ON login_failures(panel, principal, remote_addr, created_at)');
     $pdo->exec('CREATE INDEX IF NOT EXISTS idx_login_failures_created_at ON login_failures(created_at)');
@@ -154,6 +157,39 @@ function gb_load_subscribers() {
     return $data;
 }
 
+function gb_load_subscribers_by_ids(array $node_ids) {
+    $pdo = gb_db();
+    $normalized = [];
+    foreach ($node_ids as $node_id) {
+        $key = trim((string)$node_id);
+        if ($key !== '') {
+            $normalized[$key] = true;
+        }
+    }
+    $ids = array_keys($normalized);
+    if (empty($ids)) {
+        return [];
+    }
+
+    $data = [];
+    $chunk_size = 500;
+    for ($offset = 0; $offset < count($ids); $offset += $chunk_size) {
+        $chunk = array_slice($ids, $offset, $chunk_size);
+        if (empty($chunk)) {
+            continue;
+        }
+        $placeholders = implode(',', array_fill(0, count($chunk), '?'));
+        $stmt = $pdo->prepare('SELECT node_id, data_json FROM subscribers WHERE node_id IN (' . $placeholders . ')');
+        $stmt->execute($chunk);
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($rows as $row) {
+            $decoded = json_decode($row['data_json'], true);
+            $data[$row['node_id']] = is_array($decoded) ? $decoded : [];
+        }
+    }
+    return $data;
+}
+
 function gb_replace_subscribers(array $subs) {
     $pdo = gb_db();
     $pdo->beginTransaction();
@@ -178,6 +214,12 @@ function gb_get_subscribers_mtime() {
     return intval($row['mtime'] ?? 0);
 }
 
+function gb_get_node_status_mtime() {
+    $pdo = gb_db();
+    $row = $pdo->query('SELECT MAX(updated_at) AS mtime FROM node_status')->fetch(PDO::FETCH_ASSOC);
+    return intval($row['mtime'] ?? 0);
+}
+
 function gb_load_node_statuses() {
     $pdo = gb_db();
     $rows = $pdo->query('SELECT node_id, data_json FROM node_status')->fetchAll(PDO::FETCH_ASSOC);
@@ -195,6 +237,9 @@ function gb_load_chat_logs($after_id = 0, $limit = 200) {
     $last_id = intval($last_row['max_id'] ?? 0);
 
     if ($after_id > 0) {
+        if ($last_id <= $after_id) {
+            return [[], $last_id];
+        }
         $stmt = $pdo->prepare('SELECT id, data_json FROM chat_log WHERE id > ? ORDER BY id ASC');
         $stmt->execute([$after_id]);
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -240,6 +285,40 @@ function gb_load_sos_logs($active_only = false) {
     return $entries;
 }
 
+function gb_load_recent_sos_logs($limit = 10) {
+    $pdo = gb_db();
+    $limit_int = max(1, min(5000, intval($limit)));
+    $stmt = $pdo->prepare('SELECT id, data_json, active FROM sos_log ORDER BY id DESC LIMIT ?');
+    $stmt->bindValue(1, $limit_int, PDO::PARAM_INT);
+    $stmt->execute();
+    $rows = array_reverse($stmt->fetchAll(PDO::FETCH_ASSOC));
+    $entries = [];
+    foreach ($rows as $row) {
+        $decoded = json_decode($row['data_json'], true);
+        if (!is_array($decoded)) { $decoded = []; }
+        $decoded['id'] = intval($row['id']);
+        $decoded['active'] = !empty($row['active']);
+        $entries[] = $decoded;
+    }
+    return $entries;
+}
+
+function gb_load_active_sos_logs() {
+    $pdo = gb_db();
+    $stmt = $pdo->prepare('SELECT id, data_json, active FROM sos_log WHERE active = 1 ORDER BY id DESC');
+    $stmt->execute();
+    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $entries = [];
+    foreach ($rows as $row) {
+        $decoded = json_decode($row['data_json'], true);
+        if (!is_array($decoded)) { $decoded = []; }
+        $decoded['id'] = intval($row['id']);
+        $decoded['active'] = true;
+        $entries[] = $decoded;
+    }
+    return $entries;
+}
+
 function gb_clear_sos_logs() {
     $pdo = gb_db();
     $pdo->exec('DELETE FROM sos_log');
@@ -255,6 +334,12 @@ function gb_load_dispatcher_jobs() {
         $jobs[] = is_array($decoded) ? $decoded : [];
     }
     return $jobs;
+}
+
+function gb_get_dispatcher_jobs_mtime() {
+    $pdo = gb_db();
+    $row = $pdo->query('SELECT MAX(updated_at) AS mtime FROM dispatcher_jobs')->fetch(PDO::FETCH_ASSOC);
+    return intval($row['mtime'] ?? 0);
 }
 
 function gb_replace_dispatcher_jobs(array $jobs) {
@@ -651,6 +736,18 @@ function gb_load_temp_groups() {
         ];
     }
     return $groups;
+}
+
+function gb_get_temp_groups_token() {
+    $pdo = gb_db();
+    $stmt = $pdo->query('SELECT COUNT(1) AS cnt, MAX(last_activity) AS max_last_activity, MAX(created_at) AS max_created_at, COALESCE(SUM(LENGTH(members_json)), 0) AS members_len_sum, COALESCE(SUM(CASE WHEN locked = 1 THEN 1 ELSE 0 END), 0) AS locked_count FROM temp_groups');
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    $count = intval($row['cnt'] ?? 0);
+    $max_last_activity = intval($row['max_last_activity'] ?? 0);
+    $max_created_at = intval($row['max_created_at'] ?? 0);
+    $members_len_sum = intval($row['members_len_sum'] ?? 0);
+    $locked_count = intval($row['locked_count'] ?? 0);
+    return $count . ':' . $max_last_activity . ':' . $max_created_at . ':' . $members_len_sum . ':' . $locked_count;
 }
 
 function gb_temp_group_exists($group_name) {

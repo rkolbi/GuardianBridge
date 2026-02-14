@@ -24,6 +24,14 @@ $revision = 'v1.4.0 "Dispatch"';
 require_once __DIR__ . '/db.php';
 $base_dir = '/opt/GuardianBridge';
 $env_file = $base_dir . '/.env';
+$gb_page_perf_start = microtime(true);
+register_shutdown_function(function () use ($gb_page_perf_start) {
+    $elapsed_ms = (microtime(true) - $gb_page_perf_start) * 1000;
+    if ($elapsed_ms >= 1500) {
+        $is_ajax = (isset($_POST['ajax']) && $_POST['ajax'] === 'true') ? ':ajax' : '';
+        error_log(sprintf('GuardianBridge Perf: map.php%s %.1fms', $is_ajax, $elapsed_ms));
+    }
+});
 
 // --- AUTHENTICATION CONFIG ---
 $admin_env = get_env_settings($env_file, ['ADMIN_USERNAME', 'ADMIN_PASSWORD_HASH']);
@@ -557,11 +565,25 @@ if (isset($_POST['ajax']) && $_POST['ajax'] === 'true') {
         $action = $_POST['action'] ?? '';
         if ($action === 'send_broadcast') {
             $text_to_send = $_POST['broadcast_text'] ?? '';
+            $forced_target_group = strtoupper(trim((string)($_POST['target_group'] ?? '')));
             $command_data = [];
             $error_message = '';
             
             if (empty(trim($text_to_send))) {
                 $error_message = 'Message text cannot be empty.';
+            } elseif ($forced_target_group !== '') {
+                $message_body = trim((string)$text_to_send);
+                if (preg_match('/^@([^\s]+)\s*(.*)$/s', $message_body, $forced_match)) {
+                    $forced_mention = strtoupper(trim((string)($forced_match[1] ?? '')));
+                    if ($forced_mention === $forced_target_group) {
+                        $message_body = (string)($forced_match[2] ?? '');
+                    }
+                }
+                if (trim($message_body) === '') {
+                    $error_message = "Direct message has no text. Format: @user/@tag/@all message";
+                } else {
+                    $command_data = ['command' => 'tagsend', 'tags' => $forced_target_group, 'text' => $message_body];
+                }
             } else {
                 if (strpos($text_to_send, '@') === 0) {
                     $parts = explode(' ', $text_to_send, 2);
@@ -574,28 +596,30 @@ if (isset($_POST['ajax']) && $_POST['ajax'] === 'true') {
                     } else {
                         $subscribers = get_subscribers($subscribers_file);
                         $destination_id = null;
+                        $target_tag = strtoupper($target_str);
+                        $tag_found = false;
                         if (preg_match('/^![a-f0-9]{8}$/', $target_str)) {
                             $destination_id = $target_str;
                         } else {
                             foreach ($subscribers as $node_id => $user_data) {
-                                if (isset($user_data['name']) && strtolower($user_data['name']) === strtolower($target_str)) {
+                                if (isset($user_data['name']) && strcasecmp((string)$user_data['name'], $target_str) === 0) {
                                     $destination_id = $node_id;
                                     break;
+                                }
+                                $tags = $user_data['tags'] ?? [];
+                                if (!$tag_found && is_array($tags)) {
+                                    foreach ($tags as $tag) {
+                                        if (strtoupper((string)$tag) === $target_tag) {
+                                            $tag_found = true;
+                                            break;
+                                        }
+                                    }
                                 }
                             }
                         }
                         if ($destination_id) {
                             $command_data = ['command' => 'dm', 'destinationId' => $destination_id, 'text' => $message_body, 'recipient' => $target_str];
                         } else {
-                            $target_tag = strtoupper($target_str);
-                            $tag_found = false;
-                            foreach ($subscribers as $node_id => $user_data) {
-                                $tags = $user_data['tags'] ?? [];
-                                if (is_array($tags) && in_array($target_tag, array_map('strtoupper', $tags), true)) {
-                                    $tag_found = true;
-                                    break;
-                                }
-                            }
                             if (!$tag_found && gb_temp_group_exists($target_tag)) {
                                 $tag_found = true;
                             }
@@ -634,6 +658,28 @@ if (isset($_POST['ajax']) && $_POST['ajax'] === 'true') {
                 }
             } elseif (!empty($error_message)) {
                 $response['message'] = $error_message;
+            }
+        } elseif ($action === 'get_user') {
+            $node_id = trim((string)($_POST['node_id'] ?? ''));
+            if ($node_id === '') {
+                $response['message'] = 'Node ID is required.';
+            } else {
+                $subscribers = get_subscribers($subscribers_file);
+                if (!isset($subscribers[$node_id])) {
+                    $response['success'] = true;
+                    $response['exists'] = false;
+                    $response['user'] = null;
+                    $response['message'] = 'User not found.';
+                } else {
+                    $user = $subscribers[$node_id];
+                    if (is_array($user) && isset($user['password_hash'])) {
+                        unset($user['password_hash']);
+                    }
+                    $response['success'] = true;
+                    $response['exists'] = true;
+                    $response['user'] = array_merge(['node_id' => $node_id], is_array($user) ? $user : []);
+                    $response['message'] = 'User loaded.';
+                }
             }
         } elseif ($action === 'update_ops_notes') {
             $node_id = trim((string)($_POST['node_id'] ?? ''));
@@ -1303,33 +1349,31 @@ directory.";
 
 
 // --- DATA FOR DISPLAY ---
-$queue_preview_limit = 50;
-$dead_letter_preview_limit = 50;
-$audit_preview_limit = 60;
+$queue_preview_limit = 25;
+$dead_letter_preview_limit = 25;
+$audit_preview_limit = 30;
 $settings = get_env_settings($env_file, $manageable_settings);
 $auto_backup_dir = $base_dir . '/AutoBackUp';
 $auto_backup_files = gb_list_auto_backup_files($auto_backup_dir);
 $gateway_lat = $settings['LATITUDE'] ?? 30.0000;
 $gateway_lon = $settings['LONGITUDE'] ?? -90.0000;
-$node_statuses = gb_load_node_statuses();
-$subscribers = get_subscribers($subscribers_file);
+$node_statuses = [];
+$subscribers = [];
 $dispatcher_jobs = get_dispatcher_jobs($dispatcher_file);
 $weather_current = get_locked_json_file($weather_current_file, []);
 $weather_alerts = get_locked_json_file($weather_alerts_file, []);
-$outgoing_email_count = gb_count_outgoing_emails();
-$outgoing_quarantine_count = gb_count_outgoing_emails_quarantine();
-$failed_dm_count = gb_count_failed_dm_queue();
 $outgoing_emails = gb_load_outgoing_emails($queue_preview_limit);
 $outgoing_quarantine = gb_load_outgoing_emails_quarantine($queue_preview_limit);
 $failed_dms = gb_load_failed_dm_queue($queue_preview_limit);
 $command_dead_letters = gb_load_command_dead_letters($dead_letter_preview_limit);
-$command_dead_letter_count = gb_count_command_dead_letters();
 $recent_audit_entries = gb_load_audit_logs($audit_preview_limit);
-$total_audit_count = gb_count_audit_logs();
+$outgoing_email_count = count($outgoing_emails);
+$outgoing_quarantine_count = count($outgoing_quarantine);
+$failed_dm_count = count($failed_dms);
+$command_dead_letter_count = count($command_dead_letters);
 $dispatcher_status = get_locked_json_file($dispatcher_status_file, null);
 $dispatcher_status = is_array($dispatcher_status) ? $dispatcher_status : [];
 $dispatcher_metrics = is_array($dispatcher_status['metrics'] ?? null) ? $dispatcher_status['metrics'] : [];
-$sos_log = gb_load_sos_logs(false);
 $weather_data_max_age_minutes = intval($settings['WEATHER_DATA_MAX_AGE_MINUTES'] ?? 120);
 $weather_age_seconds = get_iso_age_seconds($weather_current['timestamp'] ?? null, $weather_current_file);
 $weather_is_stale = $weather_age_seconds !== null && $weather_age_seconds > ($weather_data_max_age_minutes * 60);
@@ -1341,9 +1385,9 @@ $legacy_counts = [
     'failed_dm_queue.json' => legacy_json_count($failed_dm_queue_file),
 ];
 $db_counts = [
-    'dispatcher_jobs' => gb_count_dispatcher_jobs(),
-    'outgoing_emails' => gb_count_outgoing_emails(),
-    'failed_dm_queue' => gb_count_failed_dm_queue(),
+    'dispatcher_jobs' => count($dispatcher_jobs),
+    'outgoing_emails' => count($outgoing_emails),
+    'failed_dm_queue' => count($failed_dms),
 ];
 $legacy_files_exist = false;
 $legacy_present = false;
@@ -1360,14 +1404,6 @@ $migration_ok = $legacy_present ? $db_has_data : true;
 $days_of_week = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
 $sos_instructions_content = is_readable($sos_email_instructions_file) ? file_get_contents($sos_email_instructions_file) : '';
 $active_sos_node_id = null;
-if (is_array($node_statuses)) {
-    foreach ($node_statuses as $node_id => $status) {
-        if (isset($status['sos']) && $status['sos']) {
-            $active_sos_node_id = $node_id;
-            break; 
-        }
-    }
-}
 
 $setting_descriptions = [
     'LATITUDE' => 'The geographical latitude of the gateway (e.g., 40.7128). Required for fetching accurate local weather data.',
@@ -1386,7 +1422,7 @@ $setting_descriptions = [
     'MAX_EMAIL_BODY_LEN' => 'Max characters for an email body sent from the mesh. Recommended: ~180.',
     'STALE_NODE_MINUTES' => 'Minutes before a node is marked stale in the Live Node List.',
     'POLLING_INTERVAL_MS' => 'Status/map polling interval in milliseconds. Recommended: 5000+.',
-    'CHAT_POLLING_INTERVAL_MS' => 'Chat polling interval in milliseconds. Recommended: 2000+.',
+    'CHAT_POLLING_INTERVAL_MS' => 'Chat polling interval in milliseconds. Recommended: 1000+.',
     'WEATHER_ALERT_INTERVAL_MINS' => 'How often, in minutes, to re-broadcast an ongoing NWS alert. Recommended: 15-30.',
     'WEATHER_UPDATE_INTERVAL_MINS' => 'How often, in minutes, to broadcast current weather conditions. Recommended: 30-60.',
     'WEATHER_DATA_MAX_AGE_MINUTES' => 'Max age (minutes) before weather data is marked stale or skipped.',
@@ -1731,7 +1767,7 @@ Weather Now</button></form>
                     </div>
                     <div class="card p-6">
                         <h2 class="text-2xl font-bold mb-4 text-slate-100">Outgoing Email Queue (<?= intval($outgoing_email_count) ?>)</h2>                        <?php if (!empty($outgoing_emails)): ?>
-                            <?php if ($outgoing_email_count > count($outgoing_emails)): ?>
+                            <?php if (count($outgoing_emails) >= $queue_preview_limit): ?>
                                 <p class="text-slate-500 text-xs mb-2">Showing latest <?= count($outgoing_emails) ?> entries for fast page load.</p>
                             <?php endif; ?>
                             <div class="space-y-2 max-h-60 overflow-y-auto border border-slate-700 rounded-md p-3">
@@ -1756,7 +1792,7 @@ Weather Now</button></form>
                     <div class="card p-6 md:col-span-2">
                         <h2 class="text-2xl font-bold mb-4 text-slate-100">Outgoing Email Quarantine (<?= intval($outgoing_quarantine_count) ?>)</h2>
                         <?php if (!empty($outgoing_quarantine)): ?>
-                            <?php if ($outgoing_quarantine_count > count($outgoing_quarantine)): ?>
+                            <?php if (count($outgoing_quarantine) >= $queue_preview_limit): ?>
                                 <p class="text-slate-500 text-xs mb-2">Showing latest <?= count($outgoing_quarantine) ?> entries for fast page load.</p>
                             <?php endif; ?>
                             <div class="space-y-2 max-h-60 overflow-y-auto border border-slate-700 rounded-md p-3">
@@ -1787,7 +1823,7 @@ Weather Now</button></form>
                     <div class="card p-6 md:col-span-2">
                         <h2 class="text-2xl font-bold mb-4 text-slate-100">Queued Direct Messages (<?= intval($failed_dm_count) ?>)</h2>
                         <?php if (!empty($failed_dms)): ?>
-                            <?php if ($failed_dm_count > count($failed_dms)): ?>
+                            <?php if (count($failed_dms) >= $queue_preview_limit): ?>
                                 <p class="text-slate-500 text-xs mb-2">Showing latest <?= count($failed_dms) ?> entries for fast page load.</p>
                             <?php endif; ?>
                             <div class="space-y-2 max-h-60 overflow-y-auto border border-slate-700 rounded-md p-3">
@@ -1807,7 +1843,7 @@ strtotime($dm['timestamp']))) ?></span><br>
                     <div class="card p-6 md:col-span-2">
                         <h2 class="text-2xl font-bold mb-4 text-slate-100">Command Dead-Letter Queue (<?= intval($command_dead_letter_count) ?>)</h2>
                         <?php if (!empty($command_dead_letters)): ?>
-                            <?php if ($command_dead_letter_count > count($command_dead_letters)): ?>
+                            <?php if (count($command_dead_letters) >= $dead_letter_preview_limit): ?>
                                 <p class="text-slate-500 text-xs mb-2">Showing latest <?= count($command_dead_letters) ?> entries for fast page load.</p>
                             <?php endif; ?>
                             <div class="space-y-2 max-h-72 overflow-y-auto border border-slate-700 rounded-md p-3">
@@ -1874,10 +1910,10 @@ strtotime($dm['timestamp']))) ?></span><br>
                     </div>
                     <div class="card p-6 md:col-span-2">
                         <h2 class="text-2xl font-bold mb-4 text-slate-100">Recent Audit Activity (<?= count($recent_audit_entries) ?>)</h2>
-                        <?php if ($total_audit_count > count($recent_audit_entries)): ?>
+                        <?php if (count($recent_audit_entries) >= $audit_preview_limit): ?>
                             <p class="text-slate-500 text-xs mb-2">Showing latest <?= count($recent_audit_entries) ?> entries for fast page load.</p>
                         <?php endif; ?>
-                        <p class="text-slate-400 text-sm mb-3">Scope: all audit events. Total stored rows: <span class="font-semibold text-slate-200"><?= intval($total_audit_count) ?></span>.</p>
+                        <p class="text-slate-400 text-sm mb-3">Scope: all audit events.</p>
                         <div class="flex flex-wrap items-end gap-2 mb-4">
                             <form method="POST" class="flex flex-wrap items-end gap-2">
                                 <input type="hidden" name="action" value="export_audit_log_json">
@@ -2077,71 +2113,8 @@ strtotime($dm['timestamp']))) ?></span><br>
                                 <th class="p-4 font-semibold text-sm text-slate-400 uppercase tracking-wider">Actions</th>
                             </tr>
                         </thead>
-                        <tbody class="divide-y divide-slate-700/50">
-                            <?php if (!empty($subscribers)): foreach ($subscribers as $node_id => $user): 
-                                // Ensure user data is consistent for the modal
-                                $user['node_id'] = $node_id; 
-                            ?>
-                            <tr class="hover:bg-black/20">
-                                <td class="p-4 font-mono">
-                                    <button type="button" class="text-blue-400 hover:text-blue-300 open-dm-chat" 
-                                            data-node-id="<?= htmlspecialchars($node_id) ?>" 
-                                            data-node-name="<?= htmlspecialchars($user['name'] ?? $node_id) ?>">
-                                        <?= htmlspecialchars($node_id) ?>
-                                    </button>
-                                </td>
-                                <td class="p-4"><?= htmlspecialchars($user['name'] ?? '') ?></td>
-                                <td class="p-4">
-                                    <?php
-                                        // Get the assigned and reported roles
-                                        $assigned_role = $user['role'] ?? 'Not Set';
-                                        $reported_role_data = $node_statuses[$node_id] ?? null;
-                                        $reported_role = $reported_role_data ? htmlspecialchars($reported_role_data['role']) : 'Unknown';
-
-                                        // Determine color based on match
-                                        $is_match = (strtoupper($assigned_role) === strtoupper($reported_role));
-                                        $color_class = $is_match ? 'text-green-400' : 'text-yellow-400';
-
-                                        if ($reported_role === 'Unknown') {
-                                            $color_class = 'text-slate-500';
-                                        }
-                                    ?>
-                                    <div class="flex items-center gap-2">
-                                        <span class="font-mono text-xs p-1 rounded bg-slate-700 <?= $color_class ?>" title="This is the role being reported by the 
-radio node right now. Green means it matches the assigned role.">
-                                            <?= $reported_role ?>
-                                        </span>
-                                        <span class="font-medium">
-                                            <?= htmlspecialchars($assigned_role) ?>
-                                        </span>
-                                    </div>
-                                </td>
-                                <td class="p-4"><?= htmlspecialchars($user['full_name'] ?? '') ?></td>
-                                <td class="p-4"><?= htmlspecialchars($user['phone_1'] ?? '') ?></td>
-                                <td class="p-4 text-slate-400 text-xs">
-                                    <?php
-                                    if (!empty($user['tags']) && is_array($user['tags'])) {
-                                        foreach ($user['tags'] as $tag) {
-                                            echo '<span class="inline-block bg-slate-700 rounded-full px-2 py-1 font-semibold mr-1 mb-1">' . htmlspecialchars($tag) . 
-'</span>';
-                                        }
-                                    }
-                                    ?>
-                                </td>
-                                <td class="p-4">
-                                    <?php
-                                    $safe_user = $user;
-                                    unset($safe_user['password_hash']);
-                                    ?>
-                                    <button type="button" class="btn btn-secondary text-sm open-user-edit-modal" data-user-data="<?= 
-htmlspecialchars(json_encode($safe_user), ENT_QUOTES, 'UTF-8') ?>">
-                                        More...
-                                    </button>
-                                </td>
-                            </tr>
-                            <?php endforeach; else: ?>
-                                <tr><td colspan="7" class="p-8 text-center text-slate-500">Subscribers file is empty or not readable.</td></tr>
-                            <?php endif; ?>
+                        <tbody id="map-users-table-body" class="divide-y divide-slate-700/50">
+                            <tr><td colspan="7" class="p-8 text-center text-slate-500">Loading subscribers...</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -2569,7 +2542,10 @@ an active SOS.</p>
     <div class="card w-full max-w-2xl h-[80vh] flex flex-col mx-4">
         <h2 id="dm-chat-title" class="text-xl font-bold text-slate-100 p-4 border-b border-slate-700/50 flex justify-between items-center">
             <span class="font-mono">Direct Chat</span>
-            <button id="close-dm-modal-btn" class="text-slate-400 hover:text-white text-3xl leading-none">&times;</button>
+            <div class="flex items-center gap-2">
+                <button type="button" id="dm-chat-user-btn" class="btn btn-secondary btn-sm" disabled>User</button>
+                <button type="button" id="close-dm-modal-btn" class="text-slate-400 hover:text-white text-3xl leading-none">&times;</button>
+            </div>
         </h2>
         <div id="dm-chat-window" class="flex-grow p-4 overflow-y-auto">
             <div class="space-y-4" id="dm-chat-messages-container">
@@ -2866,13 +2842,16 @@ $day ?></label>
         let autoFitEnabled = true; // Flag to control map auto-zoom
         const POLLING_INTERVAL = <?= json_encode(max(1000, intval($all_settings['POLLING_INTERVAL_MS'] ?? 5000))) ?>;
         const csrfToken = '<?= htmlspecialchars($csrf_token) ?>';
-        const CHAT_POLLING_INTERVAL = <?= json_encode(max(500, intval($all_settings['CHAT_POLLING_INTERVAL_MS'] ?? 2000))) ?>;
+        const CHAT_POLLING_INTERVAL = <?= json_encode(max(500, intval($all_settings['CHAT_POLLING_INTERVAL_MS'] ?? 1000))) ?>;
         const STALE_NODE_MINUTES = <?= json_encode(intval($all_settings['STALE_NODE_MINUTES'] ?? 120)) ?>;
         const STALE_NODE_SECONDS = Math.max(0, Number(STALE_NODE_MINUTES)) * 60;
         let chatCursor = 0;
         let subscribersMtime = 0;
+        let chatSubscribersMtime = 0;
         let nodesEtag = '';
+        let dashboardEtag = '';
         let chatEtag = '';
+        let chatTempGroupsToken = '';
         let lastFetchedTempGroups = [];
         const CHAT_GROUP_CHANNEL = '__CHANNEL__';
         let selectedChatGroup = '';
@@ -2880,24 +2859,48 @@ $day ?></label>
         let chatStreamSource = null;
         let chatStreamRetryTimer = null;
         let chatStreamConnected = false;
-        const CHAT_STREAM_ENABLED = typeof window.EventSource !== 'undefined';
+        const CHAT_STREAM_ENABLED = false;
         const CHAT_STREAM_TIMEOUT_MS = 20000;
         const CHAT_STREAM_RETRY_MS = 1500;
         const MAX_BACKOFF_MS = 30000;
         let statusBackoffMs = 0;
         let chatBackoffMs = 0;
+        let statusPollTimer = null;
+        let chatPollTimer = null;
+        let statusPollInFlight = false;
+        let chatPollInFlight = false;
+        let updatePageInFlight = null;
+        let updateDashboardInFlight = null;
+        let updateChatInFlight = null;
+        let mapUsersTableEtag = '';
+        let mapUsersFetchInFlight = null;
         const opsNotesDraftByNode = new Map();
         const GATEWAY_LAT = <?= json_encode($gateway_lat) ?>;
         const GATEWAY_LON = <?= json_encode($gateway_lon) ?>;
         L.Icon.Default.imagePath = '/map-items/';
         async function updateDashboardData() {
-            try {
-                const response = await fetch('/map-items/api_get_dashboard.php');
-                if (!response.ok) {
-                    console.error('Failed to fetch dashboard data');
-                    return false;
-                }
-                const data = await response.json();
+            if (updateDashboardInFlight) {
+                return updateDashboardInFlight;
+            }
+            const requestPromise = (async () => {
+                try {
+                    const requestHeaders = {};
+                    if (dashboardEtag) {
+                        requestHeaders['If-None-Match'] = dashboardEtag;
+                    }
+                    const response = await fetch('/map-items/api_get_dashboard.php', { headers: requestHeaders });
+                    const responseEtag = response.headers.get('ETag');
+                    if (responseEtag) {
+                        dashboardEtag = responseEtag;
+                    }
+                    if (response.status === 304) {
+                        return true;
+                    }
+                    if (!response.ok) {
+                        console.error('Failed to fetch dashboard data');
+                        return false;
+                    }
+                    const data = await response.json();
 
                 // 1. Update System Health Panel
                 const healthContainer = document.getElementById('system-health-body');
@@ -3040,37 +3043,19 @@ $day ?></label>
                         }
                     }
                 }
-                if (sosLogContainer) {
-                    const sosLogContent = sosLogContainer.querySelector('.space-y-3');
-                    const sosLog = data.sos_log;
-                    if (sosLogContent) {
-                        if (sosLog.length > 0) {
-                            let sosHtml = '';
-                            sosLog.forEach(log => {
-                                const date = new Date(log.timestamp).toLocaleString();
-                                const phoneHtml = (log.user_info && log.user_info.phone_1) ? `<p>Phone: ${escapeHTML(log.user_info.phone_1)}</p>` : '';
-                                sosHtml += `
-                                    <div class="bg-red-900/30 p-4 rounded-lg">
-                                        <div class="flex justify-between items-center mb-2">
-                                            <span class="font-bold text-lg text-red-300">SOS: ${escapeHTML(log.sos_type || 'GENERAL')}</span>
-                                            <span class="text-sm text-slate-400">${date}</span>
-                                        </div>
-                                        <p class="font-mono text-sm">Node: ${escapeHTML(log.node_id)}</p>
-                                        <p>User: <b>${escapeHTML(log.user_info.name || 'N/A')}</b> / ${escapeHTML(log.user_info.full_name || 'N/A')}</p>
-                                        ${phoneHtml}
-                                    </div>
-                                `;
-                            });
-                            sosLogContent.innerHTML = sosHtml;
-                        } else {
-                            sosLogContent.innerHTML = '<p class="text-slate-500">The SOS log is empty.</p>';
-                        }
-                    }
+                    return true;
+                } catch (error) {
+                    console.error('Error updating dashboard data:', error);
+                    return false;
                 }
-                return true;
-            } catch (error) {
-                console.error('Error updating dashboard data:', error);
-                return false;
+            })();
+            updateDashboardInFlight = requestPromise;
+            try {
+                return await requestPromise;
+            } finally {
+                if (updateDashboardInFlight === requestPromise) {
+                    updateDashboardInFlight = null;
+                }
             }
         }
 
@@ -3092,14 +3077,37 @@ $day ?></label>
             pollChatData();
         }
 
+        function stopStatusPolling() {
+            isStatusPolling = false;
+            if (statusPollTimer) {
+                clearTimeout(statusPollTimer);
+                statusPollTimer = null;
+            }
+        }
+
+        function stopChatPolling() {
+            isChatPolling = false;
+            if (chatPollTimer) {
+                clearTimeout(chatPollTimer);
+                chatPollTimer = null;
+            }
+            stopChatStream();
+        }
+
         function scheduleStatusPoll(delayMs) {
             const nextDelay = Math.max(POLLING_INTERVAL, Number(delayMs) || POLLING_INTERVAL);
-            setTimeout(pollStatusData, nextDelay);
+            if (statusPollTimer) {
+                clearTimeout(statusPollTimer);
+            }
+            statusPollTimer = setTimeout(pollStatusData, nextDelay);
         }
 
         function scheduleChatPoll(delayMs) {
             const nextDelay = Math.max(CHAT_POLLING_INTERVAL, Number(delayMs) || CHAT_POLLING_INTERVAL);
-            setTimeout(pollChatData, nextDelay);
+            if (chatPollTimer) {
+                clearTimeout(chatPollTimer);
+            }
+            chatPollTimer = setTimeout(pollChatData, nextDelay);
         }
 
         async function pollStatusData() {
@@ -3107,6 +3115,11 @@ $day ?></label>
                 isStatusPolling = false;
                 return;
             }
+            if (statusPollInFlight) {
+                scheduleStatusPoll(statusBackoffMs || POLLING_INTERVAL);
+                return;
+            }
+            statusPollInFlight = true;
             let ok = false;
             try {
                 const pageOk = await updatePageData();
@@ -3115,6 +3128,10 @@ $day ?></label>
             } catch (error) {
                 console.error("Polling error:", error);
             } finally {
+                statusPollInFlight = false;
+                if (!isPollingActive || !isStatusPolling) {
+                    return;
+                }
                 statusBackoffMs = ok
                     ? POLLING_INTERVAL
                     : Math.min(MAX_BACKOFF_MS, Math.max(POLLING_INTERVAL, (statusBackoffMs || POLLING_INTERVAL) * 2));
@@ -3128,6 +3145,11 @@ $day ?></label>
                 stopChatStream();
                 return;
             }
+            if (chatPollInFlight) {
+                scheduleChatPoll(chatBackoffMs || CHAT_POLLING_INTERVAL);
+                return;
+            }
+            chatPollInFlight = true;
             let ok = true;
             try {
                 if (CHAT_STREAM_ENABLED) {
@@ -3141,6 +3163,10 @@ $day ?></label>
                 console.error("Chat polling error:", error);
                 ok = false;
             } finally {
+                chatPollInFlight = false;
+                if (!isPollingActive || !isChatPolling) {
+                    return;
+                }
                 chatBackoffMs = ok
                     ? CHAT_POLLING_INTERVAL
                     : Math.min(MAX_BACKOFF_MS, Math.max(CHAT_POLLING_INTERVAL, (chatBackoffMs || CHAT_POLLING_INTERVAL) * 2));
@@ -3435,52 +3461,68 @@ $day ?></label>
         const sosBanner = document.getElementById('sos-banner');
         const sosBannerText = document.getElementById('sos-banner-text');
 
-        async function updatePageData() {
-            try {
-                const requestHeaders = {};
-                if (nodesEtag) {
-                    requestHeaders['If-None-Match'] = nodesEtag;
-                }
-                const response = await fetch('/map-items/api_get_nodes.php', { headers: requestHeaders });
-                const responseEtag = response.headers.get('ETag');
-                if (responseEtag) {
-                    nodesEtag = responseEtag;
-                }
-                if (response.status === 304) {
+        async function updatePageData(forceFresh = false) {
+            if (updatePageInFlight && !forceFresh) {
+                return updatePageInFlight;
+            }
+            const requestPromise = (async () => {
+                try {
+                    const requestHeaders = {};
+                    if (!forceFresh && nodesEtag) {
+                        requestHeaders['If-None-Match'] = nodesEtag;
+                    }
+                    const response = await fetch('/map-items/api_get_nodes.php', { headers: requestHeaders });
+                    const responseEtag = response.headers.get('ETag');
+                    if (responseEtag) {
+                        nodesEtag = responseEtag;
+                    }
+                    if (response.status === 304) {
+                        return true;
+                    }
+                    if (!response.ok) {
+                        console.error('Failed to fetch node data. Status:', response.status);
+                        return false;
+                    }
+                    const payload = await response.json();
+                    const nodes = payload && payload.nodes ? payload.nodes : payload;
+                    if (!Array.isArray(nodes)) return false;
+                    if (payload && typeof payload.subscribers_mtime === 'number') {
+                        subscribersMtime = payload.subscribers_mtime;
+                    }
+
+                    const nodesSignature = buildNodesSignature(nodes);
+                    if (nodesSignature === lastNodesSignature) {
+                        if (map && Object.keys(nodeMarkers).length === 0 && nodes.length > 0) {
+                            updateMapMarkers(nodes);
+                        }
+                        return true;
+                    }
+                    lastNodesSignature = nodesSignature;
+
+                    const activeSosIds = new Set(nodes.filter(n => n.sos).map(n => n.node_id));
+                    acknowledgedSosNodes.forEach(nodeId => {
+                        if (!activeSosIds.has(nodeId)) {
+                            acknowledgedSosNodes.delete(nodeId);
+                        }
+                    });
+
+                    updateNodeList(nodes);
+                    updateSosBanner(nodes);
+                    updateMapMarkers(nodes);
                     return true;
-                }
-                if (!response.ok) {
-                    console.error('Failed to fetch node data. Status:', response.status);
+
+                } catch (error) {
+                    console.error('Error fetching node data:', error);
                     return false;
                 }
-                const payload = await response.json();
-                const nodes = payload && payload.nodes ? payload.nodes : payload;
-                if (!Array.isArray(nodes)) return false;
-                if (payload && typeof payload.subscribers_mtime === 'number') {
-                    subscribersMtime = payload.subscribers_mtime;
+            })();
+            updatePageInFlight = requestPromise;
+            try {
+                return await requestPromise;
+            } finally {
+                if (updatePageInFlight === requestPromise) {
+                    updatePageInFlight = null;
                 }
-
-                const nodesSignature = buildNodesSignature(nodes);
-                if (nodesSignature === lastNodesSignature) {
-                    return true;
-                }
-                lastNodesSignature = nodesSignature;
-
-                const activeSosIds = new Set(nodes.filter(n => n.sos).map(n => n.node_id));
-                acknowledgedSosNodes.forEach(nodeId => {
-                    if (!activeSosIds.has(nodeId)) {
-                        acknowledgedSosNodes.delete(nodeId);
-                    }
-                });
-
-                updateNodeList(nodes);
-                updateSosBanner(nodes);
-                updateMapMarkers(nodes);
-                return true;
-
-            } catch (error) {
-                console.error('Error fetching node data:', error);
-                return false;
             }
         }
 
@@ -3717,7 +3759,29 @@ $day ?></label>
         
         // --- CHAT FUNCTIONS ---
         let lastFetchedMessages = [];
+        let chatMessageKeys = new Set();
         let lastFetchedSubscribers = {};
+        let subscriberNameTargets = new Set();
+        let localUserDirectory = Object.create(null);
+        let userEditButtonsByNodeId = Object.create(null);
+
+        function getChatMessageKey(message) {
+            if (!message || typeof message !== 'object') {
+                return '';
+            }
+            if (message._optimistic_token) {
+                return `optimistic:${String(message._optimistic_token)}`;
+            }
+            const numericId = Number(message.id);
+            if (Number.isFinite(numericId) && numericId > 0) {
+                return `id:${Math.trunc(numericId)}`;
+            }
+            const from = String(message.from || '');
+            const text = String(message.text || '');
+            const timestamp = String(message.timestamp || '');
+            const isDm = !!message.is_dm ? '1' : '0';
+            return `fallback:${from}|${timestamp}|${isDm}|${text}`;
+        }
 
         function applyChatPayload(data, forceRender = false) {
             if (!data || typeof data !== 'object') return false;
@@ -3729,18 +3793,49 @@ $day ?></label>
             const total = typeof data.total === 'number' ? data.total : chatCursor;
             if (total < chatCursor) {
                 lastFetchedMessages = [];
+                chatMessageKeys = new Set();
                 chatCursor = 0;
                 messagesChanged = true;
             }
 
-            const messages = (data.messages || []);
+            const messages = Array.isArray(data.messages) ? data.messages : [];
             if (messages.length > 0) {
-                lastFetchedMessages = lastFetchedMessages.concat(messages);
-                if (lastFetchedMessages.length > 200) {
-                    lastFetchedMessages = lastFetchedMessages.slice(-200);
+                const incomingGatewayTexts = new Set(
+                    messages
+                        .filter((msg) => msg && msg.from === 'GATEWAY')
+                        .map((msg) => String(msg.text || ''))
+                );
+                if (incomingGatewayTexts.size > 0) {
+                    const beforeCount = lastFetchedMessages.length;
+                    lastFetchedMessages = lastFetchedMessages.filter((msg) => {
+                        if (!msg || !msg._optimistic || msg.from !== 'GATEWAY') return true;
+                        return !incomingGatewayTexts.has(String(msg.text || ''));
+                    });
+                    if (lastFetchedMessages.length !== beforeCount) {
+                        chatMessageKeys = new Set(lastFetchedMessages.map(getChatMessageKey).filter(Boolean));
+                        messagesChanged = true;
+                    }
+                }
+                const dedupedIncoming = [];
+                for (const msg of messages) {
+                    const key = getChatMessageKey(msg);
+                    if (key && chatMessageKeys.has(key)) {
+                        continue;
+                    }
+                    if (key) {
+                        chatMessageKeys.add(key);
+                    }
+                    dedupedIncoming.push(msg);
+                }
+                if (dedupedIncoming.length > 0) {
+                    lastFetchedMessages = lastFetchedMessages.concat(dedupedIncoming);
+                    if (lastFetchedMessages.length > 200) {
+                        lastFetchedMessages = lastFetchedMessages.slice(-200);
+                        chatMessageKeys = new Set(lastFetchedMessages.map(getChatMessageKey).filter(Boolean));
+                    }
+                    messagesChanged = true;
                 }
                 chatCursor = total;
-                messagesChanged = true;
             }
 
             if (data.subscribers_included) {
@@ -3749,14 +3844,24 @@ $day ?></label>
                 } else {
                     lastFetchedSubscribers = {};
                 }
+                subscriberNameTargets = new Set(
+                    Object.values(lastFetchedSubscribers || {})
+                        .map((user) => normalizeTagName(user?.name))
+                        .filter(Boolean)
+                );
                 subscribersChanged = true;
             }
 
             if (typeof data.subscribers_mtime === 'number') {
-                subscribersMtime = data.subscribers_mtime;
+                chatSubscribersMtime = data.subscribers_mtime;
             }
 
-            if (Array.isArray(data.temp_groups)) {
+            if (typeof data.temp_groups_token === 'string') {
+                chatTempGroupsToken = data.temp_groups_token;
+            }
+
+            const groupsPayloadIncluded = data.temp_groups_included === true || (!('temp_groups_included' in data) && Array.isArray(data.temp_groups));
+            if (groupsPayloadIncluded && Array.isArray(data.temp_groups)) {
                 const nextSignature = JSON.stringify(data.temp_groups.map(group => [
                     String(group.group_name || '').toUpperCase(),
                     !!group.locked
@@ -3816,7 +3921,8 @@ $day ?></label>
             const params = new URLSearchParams({
                 after: String(chatCursor),
                 with_subscribers: '1',
-                subscribers_mtime: String(subscribersMtime),
+                subscribers_mtime: String(chatSubscribersMtime),
+                temp_groups_token: String(chatTempGroupsToken),
                 timeout_ms: String(CHAT_STREAM_TIMEOUT_MS)
             });
             const streamUrl = `/map-items/api_get_chat_stream.php?${params.toString()}`;
@@ -3857,7 +3963,8 @@ $day ?></label>
                 const params = new URLSearchParams({
                     after: chatCursor,
                     with_subscribers: '1',
-                    subscribers_mtime: String(subscribersMtime)
+                    subscribers_mtime: String(chatSubscribersMtime),
+                    temp_groups_token: String(chatTempGroupsToken)
                 });
                 const requestHeaders = {};
                 if (chatEtag) {
@@ -3886,33 +3993,47 @@ $day ?></label>
         }
 
         async function updateChat() {
-            try {
-                const params = new URLSearchParams({
-                    after: chatCursor,
-                    with_subscribers: '1',
-                    subscribers_mtime: String(subscribersMtime)
-                });
-                const requestHeaders = {};
-                if (chatEtag) {
-                    requestHeaders['If-None-Match'] = chatEtag;
-                }
-                const response = await fetch(`/map-items/api_get_chat.php?${params.toString()}`, { headers: requestHeaders });
-                const responseEtag = response.headers.get('ETag');
-                if (responseEtag) {
-                    chatEtag = responseEtag;
-                }
-                if (response.status === 304) {
-                    return true;
-                }
-                if (!response.ok) {
-                    console.error('Failed to fetch chat data. Status:', response.status);
+            if (updateChatInFlight) {
+                return updateChatInFlight;
+            }
+            const requestPromise = (async () => {
+                try {
+                    const params = new URLSearchParams({
+                        after: chatCursor,
+                        with_subscribers: '1',
+                        subscribers_mtime: String(chatSubscribersMtime),
+                        temp_groups_token: String(chatTempGroupsToken)
+                    });
+                    const requestHeaders = {};
+                    if (chatEtag) {
+                        requestHeaders['If-None-Match'] = chatEtag;
+                    }
+                    const response = await fetch(`/map-items/api_get_chat.php?${params.toString()}`, { headers: requestHeaders });
+                    const responseEtag = response.headers.get('ETag');
+                    if (responseEtag) {
+                        chatEtag = responseEtag;
+                    }
+                    if (response.status === 304) {
+                        return true;
+                    }
+                    if (!response.ok) {
+                        console.error('Failed to fetch chat data. Status:', response.status);
+                        return false;
+                    }
+                    const data = await response.json();
+                    return applyChatPayload(data);
+                } catch (error) {
+                    console.error('Error updating chat:', error);
                     return false;
                 }
-                const data = await response.json();
-                return applyChatPayload(data);
-            } catch (error) {
-                console.error('Error updating chat:', error);
-                return false;
+            })();
+            updateChatInFlight = requestPromise;
+            try {
+                return await requestPromise;
+            } finally {
+                if (updateChatInFlight === requestPromise) {
+                    updateChatInFlight = null;
+                }
             }
         }
 
@@ -3973,6 +4094,9 @@ $day ?></label>
                 isChatTabInitialized = true;
             }
             isPollingActive = true;
+            renderChatGroupTabs();
+            renderFilteredChat();
+            void updateChat();
             startChatPolling();
         }
 
@@ -3988,8 +4112,9 @@ $day ?></label>
                 const contentId = tab.dataset.tab + '-content';
                 document.getElementById(contentId).style.display = 'block';
 
-                isPollingActive = false; // Stop polling before re-initializing
-                stopChatStream();
+                isPollingActive = false;
+                stopStatusPolling();
+                stopChatPolling();
                 if (tab.dataset.tab === 'status') {
                 initStatusTab();
                 if(map) setTimeout(() => map.invalidateSize(), 10);
@@ -3998,8 +4123,27 @@ $day ?></label>
                 } else if (tab.dataset.tab === 'actions') {
                     // Fetch blocklist when the actions tab is viewed
                     fetchBlocklist();
+                } else if (tab.dataset.tab === 'users') {
+                    void ensureMapUsersTableLoaded(false);
                 }
             });
+        });
+
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) {
+                isPollingActive = false;
+                stopStatusPolling();
+                stopChatPolling();
+                return;
+            }
+            const activeTab = document.querySelector('.tab-button.active')?.dataset?.tab || '';
+            if (activeTab === 'status') {
+                isPollingActive = true;
+                startStatusPolling();
+            } else if (activeTab === 'chat') {
+                isPollingActive = true;
+                startChatPolling();
+            }
         });
 
         // --- NEW: Blocklist Management Functions ---
@@ -4104,7 +4248,6 @@ $day ?></label>
     });
 
         initStatusTab();
-        initChatTab(); // Start polling for chat data on initial load
 
         const sosBannerCloseBtn = document.getElementById('sos-banner-close');
         sosBannerCloseBtn?.addEventListener('click', () => {
@@ -4249,6 +4392,7 @@ $day ?></label>
         const dmChatTextarea = document.getElementById('dm-chat-textarea');
         const dmChatSendBtn = document.getElementById('dm-chat-send-btn');
         const dmChatBellBtn = document.getElementById('dm-chat-bell-btn');
+        const dmChatUserBtn = document.getElementById('dm-chat-user-btn');
         const dmTargetNodeIdInput = document.getElementById('dm-target-node-id-input');
         const closeDmModalBtn = document.getElementById('close-dm-modal-btn');
         const userEditModal = document.getElementById('user-edit-modal');
@@ -4346,6 +4490,7 @@ $day ?></label>
                 button.addEventListener('click', () => {
                     selectedChatGroup = String(button.dataset.chatGroup || '').toUpperCase();
                     renderChatGroupTabs();
+                    renderFilteredChat();
                 });
             });
 
@@ -4408,7 +4553,110 @@ $day ?></label>
             if (/^![A-F0-9]{8}$/i.test(target)) {
                 return true;
             }
-            return Object.values(lastFetchedSubscribers || {}).some((user) => normalizeTagName(user?.name) === target);
+            return subscriberNameTargets.has(target);
+        }
+
+        function getMessageMentionTarget(text) {
+            const clean = String(text || '').replace(/^\x07/, '').trim();
+            if (!clean.startsWith('@')) {
+                return '';
+            }
+            return normalizeTagName(clean.split(/\s+/, 1)[0].slice(1));
+        }
+
+        function getMessageBracketGroupTarget(text) {
+            const clean = String(text || '').replace(/^\x07/, '').trim();
+            const match = clean.match(/^\[([^\]]+)\]/);
+            if (!match) {
+                return '';
+            }
+            return normalizeTagName(match[1]);
+        }
+
+        function findNodeIdByMentionTarget(target) {
+            const normalizedTarget = normalizeTagName(target);
+            if (!normalizedTarget) {
+                return '';
+            }
+            const allCandidates = Object.assign({}, localUserDirectory || {}, lastFetchedSubscribers || {});
+            for (const [nodeId, userData] of Object.entries(allCandidates)) {
+                if (normalizeTagName(nodeId) === normalizedTarget) {
+                    return nodeId;
+                }
+                if (normalizeTagName(userData?.name) === normalizedTarget) {
+                    return nodeId;
+                }
+            }
+            return '';
+        }
+
+        function nodeBelongsToChatGroup(nodeId, groupName) {
+            const normalizedGroup = normalizeTagName(groupName);
+            const rawNodeId = String(nodeId || '').trim();
+            if (!normalizedGroup || !rawNodeId) {
+                return false;
+            }
+            let targetNodeId = rawNodeId;
+            let userData = lastFetchedSubscribers[targetNodeId] || getLocalUserRecord(targetNodeId) || null;
+            if (!userData) {
+                const normalizedNodeId = normalizeTagName(rawNodeId);
+                const allCandidates = Object.assign({}, localUserDirectory || {}, lastFetchedSubscribers || {});
+                const matchedNodeId = Object.keys(allCandidates).find((candidateId) => normalizeTagName(candidateId) === normalizedNodeId);
+                if (matchedNodeId) {
+                    targetNodeId = matchedNodeId;
+                    userData = allCandidates[matchedNodeId] || null;
+                }
+            }
+            userData = userData || {};
+            const userTags = Array.isArray(userData.tags) ? userData.tags : [];
+            if (userTags.some((tag) => normalizeTagName(tag) === normalizedGroup)) {
+                return true;
+            }
+            const normalizedNode = normalizeTagName(targetNodeId);
+            const normalizedName = normalizeTagName(userData?.name);
+            for (const group of (Array.isArray(lastFetchedTempGroups) ? lastFetchedTempGroups : [])) {
+                if (normalizeTagName(group?.group_name) !== normalizedGroup) {
+                    continue;
+                }
+                const members = Array.isArray(group?.members) ? group.members : [];
+                for (const member of members) {
+                    const normalizedMember = normalizeTagName(member);
+                    if (!normalizedMember) {
+                        continue;
+                    }
+                    if (normalizedMember === normalizedNode || (normalizedName && normalizedMember === normalizedName)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        function messageBelongsToSelectedGroup(msg, groupName) {
+            const normalizedGroup = normalizeTagName(groupName);
+            if (!normalizedGroup || normalizedGroup === CHAT_GROUP_CHANNEL) {
+                return true;
+            }
+            const text = String(msg?.text || '');
+            const mentionTarget = getMessageMentionTarget(text);
+            const bracketTarget = getMessageBracketGroupTarget(text);
+            const fromId = String(msg?.from || '').trim();
+
+            if (fromId === 'GATEWAY') {
+                if (mentionTarget === normalizedGroup || bracketTarget === normalizedGroup) {
+                    return true;
+                }
+                if (!mentionTarget) {
+                    return false;
+                }
+                const targetNodeId = findNodeIdByMentionTarget(mentionTarget);
+                return targetNodeId ? nodeBelongsToChatGroup(targetNodeId, normalizedGroup) : false;
+            }
+
+            if (mentionTarget === normalizedGroup || bracketTarget === normalizedGroup) {
+                return true;
+            }
+            return nodeBelongsToChatGroup(fromId, normalizedGroup);
         }
         
         function renderFilteredChat() {
@@ -4417,6 +4665,8 @@ $day ?></label>
             if (!chatContainerElement || !chatWindow) return;
             const showDMs = document.getElementById('show-dms-checkbox')?.checked ?? false;
             const showSMs = document.getElementById('show-sms-checkbox')?.checked ?? false;
+            const activeGroup = normalizeTagName(selectedChatGroup);
+            const enforceGroupFilter = !!activeGroup && activeGroup !== CHAT_GROUP_CHANNEL;
             const isScrolledToBottom = chatWindow.scrollHeight - chatWindow.clientHeight <= chatWindow.scrollTop + 10;
             const filteredMessages = lastFetchedMessages.filter(msg => {
                 const text = (msg.text || '').trim();
@@ -4425,12 +4675,12 @@ $day ?></label>
                 if (isServerMessage) return showSMs; // Filter for server messages
                 // A DM is either flagged with `is_dm` or is an outgoing gateway message targeting a specific user.
                 let isConsideredDM = msg.is_dm || (msg.from === 'GATEWAY' && isOutgoingDirectMessage(text));
+                if (enforceGroupFilter && !messageBelongsToSelectedGroup(msg, activeGroup)) return false;
                 if (isConsideredDM) return showDMs;
                 return true;
             });
-            chatContainerElement.innerHTML = '';
             if (filteredMessages.length > 0) {
-                filteredMessages.forEach(msg => { chatContainerElement.innerHTML += createMessageHTML(msg, lastFetchedSubscribers, false); });
+                chatContainerElement.innerHTML = filteredMessages.map((msg) => createMessageHTML(msg, lastFetchedSubscribers, false)).join('');
             } else {
                 chatContainerElement.innerHTML = `<div class="text-center text-slate-500 py-16"><p>No messages to display with current filters.</p></div>`;
             }
@@ -4440,7 +4690,8 @@ $day ?></label>
         function renderDmChat() {
             if (!dmModal || dmModal.style.display === 'none' || !dmChatContainer) return;
             const targetNodeId = dmTargetNodeIdInput.value;
-            if (!targetNodeId) { dmChatContainer.innerHTML = ''; return; };
+            if (!targetNodeId) { dmChatContainer.innerHTML = ''; updateDmChatActionButtons(''); return; };
+            updateDmChatActionButtons(targetNodeId);
             const targetName = lastFetchedSubscribers[targetNodeId]?.name || targetNodeId;
             const filteredMessages = lastFetchedMessages.filter(msg => {
                 const gatewayToUserRegex = new RegExp(`^@${escapeRegExp(targetName)}\\s`, 'i');
@@ -4450,14 +4701,305 @@ $day ?></label>
                 return fromUserToGateway || fromGatewayToUser; // Show messages from the user to the gateway, or from the gateway to the user.
             });
             const isScrolledToBottom = dmChatWindow.scrollHeight - dmChatWindow.clientHeight <= dmChatWindow.scrollTop + 10;
-            dmChatContainer.innerHTML = '';
             if (filteredMessages.length > 0) {
-                filteredMessages.forEach(msg => { dmChatContainer.innerHTML += createMessageHTML(msg, lastFetchedSubscribers, true); 
-});
+                dmChatContainer.innerHTML = filteredMessages.map((msg) => createMessageHTML(msg, lastFetchedSubscribers, true)).join('');
             } else {
                 dmChatContainer.innerHTML = `<div class="text-center text-slate-500 py-16"><p>No direct messages with this user yet.</p></div>`;
             }
             if (isScrolledToBottom) { dmChatWindow.scrollTop = dmChatWindow.scrollHeight; }
+        }
+
+        function setLocalUserRecord(nodeId, userData) {
+            const targetNodeId = String(nodeId || userData?.node_id || '').trim();
+            if (!targetNodeId || !userData || typeof userData !== 'object' || Array.isArray(userData)) {
+                return;
+            }
+            localUserDirectory[targetNodeId] = { ...userData, node_id: targetNodeId };
+        }
+
+        function renderMapUsersTable(usersPayload) {
+            const tbody = document.getElementById('map-users-table-body');
+            if (!tbody) {
+                return;
+            }
+            const rows = Array.isArray(usersPayload?.rows) ? usersPayload.rows : [];
+            if (rows.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="7" class="p-8 text-center text-slate-500">No subscribers found.</td></tr>';
+                indexUserEditButtonsByNodeId();
+                return;
+            }
+            tbody.innerHTML = rows.map((row) => {
+                const nodeId = String(row?.node_id || '').trim();
+                const name = String(row?.name || '');
+                const fullName = String(row?.full_name || '');
+                const phone1 = String(row?.phone_1 || '');
+                const assignedRole = String(row?.assigned_role || '');
+                const reportedRole = String(row?.reported_role || 'Unknown');
+                const roleClass = reportedRole === 'Unknown'
+                    ? 'text-slate-500'
+                    : (row?.reported_role_matches ? 'text-green-400' : 'text-yellow-400');
+                const tags = Array.isArray(row?.tags) ? row.tags.filter(Boolean) : [];
+                const tagsHtml = tags.length
+                    ? tags.map((tag) => `<span class="inline-block bg-slate-700 rounded-full px-2 py-1 font-semibold mr-1 mb-1">${escapeHTML(String(tag))}</span>`).join('')
+                    : '';
+                const displayName = name || nodeId;
+                return `
+                    <tr class="hover:bg-black/20">
+                        <td class="p-4 font-mono">
+                            <button type="button" class="text-blue-400 hover:text-blue-300 open-dm-chat" data-node-id="${escapeHTML(nodeId)}" data-node-name="${escapeHTML(displayName)}">${escapeHTML(nodeId)}</button>
+                        </td>
+                        <td class="p-4">${escapeHTML(name)}</td>
+                        <td class="p-4">
+                            <div class="flex items-center gap-2">
+                                <span class="font-mono text-xs p-1 rounded bg-slate-700 ${roleClass}" title="This is the role being reported by the radio node right now. Green means it matches the assigned role.">${escapeHTML(reportedRole)}</span>
+                                <span class="font-medium">${escapeHTML(assignedRole)}</span>
+                            </div>
+                        </td>
+                        <td class="p-4">${escapeHTML(fullName)}</td>
+                        <td class="p-4">${escapeHTML(phone1)}</td>
+                        <td class="p-4 text-slate-400 text-xs">${tagsHtml}</td>
+                        <td class="p-4"><button type="button" class="btn btn-secondary text-sm open-user-edit-modal" data-node-id="${escapeHTML(nodeId)}">More...</button></td>
+                    </tr>
+                `;
+            }).join('');
+            indexUserEditButtonsByNodeId();
+        }
+
+        async function fetchMapUsersTable(forceFresh = false) {
+            const requestHeaders = {};
+            if (!forceFresh && mapUsersTableEtag) {
+                requestHeaders['If-None-Match'] = mapUsersTableEtag;
+            }
+            const response = await fetch('/map-items/api_get_admin_tables.php?scope=users', { headers: requestHeaders });
+            const responseEtag = response.headers.get('ETag');
+            if (responseEtag) {
+                mapUsersTableEtag = responseEtag;
+            }
+            if (response.status === 304) {
+                return true;
+            }
+            if (!response.ok) {
+                const tbody = document.getElementById('map-users-table-body');
+                if (tbody) {
+                    tbody.innerHTML = '<tr><td colspan="7" class="p-8 text-center text-slate-500">Failed to load subscribers.</td></tr>';
+                }
+                return false;
+            }
+            const payload = await response.json();
+            if (payload?.users?.directory && typeof payload.users.directory === 'object') {
+                localUserDirectory = Object.assign(Object.create(null), localUserDirectory || {}, payload.users.directory || {});
+            }
+            renderMapUsersTable(payload?.users || null);
+            return true;
+        }
+
+        function ensureMapUsersTableLoaded(forceFresh = false) {
+            if (mapUsersFetchInFlight) {
+                return mapUsersFetchInFlight;
+            }
+            const requestPromise = fetchMapUsersTable(forceFresh)
+                .catch((error) => {
+                    console.error('Failed to load users table:', error);
+                    return false;
+                })
+                .finally(() => {
+                    if (mapUsersFetchInFlight === requestPromise) {
+                        mapUsersFetchInFlight = null;
+                    }
+                });
+            mapUsersFetchInFlight = requestPromise;
+            return requestPromise;
+        }
+
+        function getLocalUserRecord(nodeId) {
+            const targetNodeId = String(nodeId || '').trim();
+            if (!targetNodeId) {
+                return null;
+            }
+            const local = localUserDirectory[targetNodeId];
+            if (local && typeof local === 'object' && !Array.isArray(local)) {
+                return { ...local, node_id: targetNodeId };
+            }
+            const button = userEditButtonsByNodeId[targetNodeId] || null;
+            if (!button) {
+                return null;
+            }
+            const serialized = String(button.dataset.userData || '').trim();
+            if (!serialized) {
+                return null;
+            }
+            try {
+                const parsed = JSON.parse(serialized);
+                if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                    const normalizedNodeId = String(parsed.node_id || targetNodeId).trim();
+                    setLocalUserRecord(normalizedNodeId, parsed);
+                    const cached = localUserDirectory[normalizedNodeId] || null;
+                    if (cached && typeof cached === 'object' && !Array.isArray(cached)) {
+                        return { ...cached, node_id: normalizedNodeId };
+                    }
+                }
+            } catch (err) {
+                return null;
+            }
+            return null;
+        }
+
+        function indexUserEditButtonsByNodeId() {
+            userEditButtonsByNodeId = Object.create(null);
+            document.querySelectorAll('.open-user-edit-modal').forEach((button) => {
+                const nodeId = String(button.dataset.nodeId || '').trim();
+                if (nodeId) {
+                    userEditButtonsByNodeId[nodeId] = button;
+                }
+            });
+        }
+
+        function getDmSubscriberRecord(nodeId) {
+            const targetNodeId = String(nodeId || '').trim();
+            if (!targetNodeId) {
+                return null;
+            }
+            const raw = lastFetchedSubscribers[targetNodeId];
+            if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+                return { node_id: targetNodeId, ...raw };
+            }
+            return getLocalUserRecord(targetNodeId);
+        }
+
+        async function fetchUserRecord(nodeId) {
+            const targetNodeId = String(nodeId || '').trim();
+            if (!targetNodeId) {
+                return null;
+            }
+            const formData = new FormData();
+            formData.append('ajax', 'true');
+            formData.append('action', 'get_user');
+            formData.append('node_id', targetNodeId);
+            formData.append('csrf_token', csrfToken);
+            try {
+                const response = await fetch(window.location.href, { method: 'POST', body: formData });
+                if (!response.ok) {
+                    return null;
+                }
+                const payload = await response.json();
+                if (!payload || !payload.success || !payload.exists || !payload.user || typeof payload.user !== 'object') {
+                    return null;
+                }
+                setLocalUserRecord(targetNodeId, payload.user);
+                return getLocalUserRecord(targetNodeId);
+            } catch (error) {
+                console.error('Failed to load user record:', error);
+                return null;
+            }
+        }
+
+        async function ensureUserRecord(nodeId) {
+            const targetNodeId = String(nodeId || '').trim();
+            if (!targetNodeId) {
+                return null;
+            }
+            const localRecord = getDmSubscriberRecord(targetNodeId);
+            if (localRecord) {
+                return localRecord;
+            }
+            return fetchUserRecord(targetNodeId);
+        }
+
+        function updateDmChatActionButtons(nodeId) {
+            const targetNodeId = String(nodeId || '').trim();
+            const hasTarget = targetNodeId !== '';
+            const localRecord = getLocalUserRecord(targetNodeId);
+            const fallbackName = String(
+                lastFetchedSubscribers[targetNodeId]?.name ||
+                localRecord?.name ||
+                dmChatUserBtn?.dataset?.nodeName ||
+                targetNodeId
+            );
+
+            if (dmChatUserBtn) {
+                dmChatUserBtn.dataset.nodeId = hasTarget ? targetNodeId : '';
+                dmChatUserBtn.dataset.nodeName = hasTarget ? fallbackName : '';
+                dmChatUserBtn.disabled = !hasTarget;
+            }
+        }
+
+        function openCreateUserFromDmTarget(nodeId) {
+            const targetNodeId = String(nodeId || '').trim();
+            if (!targetNodeId) {
+                return;
+            }
+            const localRecord = getLocalUserRecord(targetNodeId);
+            const targetName = String(
+                lastFetchedSubscribers[targetNodeId]?.name ||
+                localRecord?.name ||
+                dmChatUserBtn?.dataset?.nodeName ||
+                targetNodeId
+            );
+            const usersTabButton = document.querySelector('.tab-button[data-tab="users"]');
+            usersTabButton?.click();
+            const newNodeIdInput = document.getElementById('new_node_id');
+            const newNameInput = document.getElementById('new_name');
+            const newPasswordInput = document.getElementById('new_password');
+            if (newNodeIdInput) {
+                newNodeIdInput.value = targetNodeId;
+            }
+            if (newNameInput && !String(newNameInput.value || '').trim()) {
+                newNameInput.value = targetName;
+            }
+            setTimeout(() => {
+                if (newPasswordInput) {
+                    newPasswordInput.focus();
+                } else if (newNameInput) {
+                    newNameInput.focus();
+                } else if (newNodeIdInput) {
+                    newNodeIdInput.focus();
+                }
+            }, 50);
+        }
+
+        function formatOptimisticChatTimestamp() {
+            const now = new Date();
+            const hh = String(now.getHours()).padStart(2, '0');
+            const mm = String(now.getMinutes()).padStart(2, '0');
+            const month = String(now.getMonth() + 1).padStart(2, '0');
+            const day = String(now.getDate()).padStart(2, '0');
+            return `${hh}:${mm} ${month}/${day}`;
+        }
+
+        function addOptimisticGatewayMessage(messageText) {
+            const text = String(messageText || '');
+            if (!text.trim()) return '';
+            const optimisticToken = `gw-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+            const optimisticMessage = {
+                from: 'GATEWAY',
+                text,
+                timestamp: formatOptimisticChatTimestamp(),
+                is_dm: false,
+                _optimistic: true,
+                _optimistic_token: optimisticToken
+            };
+            const key = getChatMessageKey(optimisticMessage);
+            if (key) {
+                chatMessageKeys.add(key);
+            }
+            lastFetchedMessages = lastFetchedMessages.concat(optimisticMessage);
+            if (lastFetchedMessages.length > 200) {
+                lastFetchedMessages = lastFetchedMessages.slice(-200);
+                chatMessageKeys = new Set(lastFetchedMessages.map(getChatMessageKey).filter(Boolean));
+            }
+            renderAllChats();
+            return optimisticToken;
+        }
+
+        function removeOptimisticGatewayMessage(optimisticToken) {
+            const token = String(optimisticToken || '').trim();
+            if (!token) return;
+            const beforeCount = lastFetchedMessages.length;
+            lastFetchedMessages = lastFetchedMessages.filter((msg) => String(msg?._optimistic_token || '') !== token);
+            if (lastFetchedMessages.length !== beforeCount) {
+                chatMessageKeys = new Set(lastFetchedMessages.map(getChatMessageKey).filter(Boolean));
+                renderAllChats();
+            }
         }
         
         function escapeRegExp(string) { return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
@@ -4491,8 +5033,10 @@ $day ?></label>
             const isDmContext = !!button.closest('#dm-chat-form');
             let routedText = text;
             const trimmed = text.trim();
+            let forcedTargetGroup = '';
             if (!isDmContext && !trimmed.startsWith('@')) {
                 if (selectedChatGroup && selectedChatGroup !== CHAT_GROUP_CHANNEL) {
+                    forcedTargetGroup = normalizeTagName(selectedChatGroup);
                     routedText = `@${selectedChatGroup} ${trimmed}`;
                 } else {
                     routedText = trimmed;
@@ -4516,12 +5060,16 @@ $day ?></label>
                     messageToSend = `\x07${routedTrimmed}`;
                 }
             }
+            const optimisticToken = addOptimisticGatewayMessage(messageToSend);
             
             const csrfToken = document.querySelector('input[name="csrf_token"]').value;
             const formData = new FormData();
             formData.append('ajax', 'true');
             formData.append('action', 'send_broadcast');
             formData.append('broadcast_text', messageToSend);
+            if (forcedTargetGroup) {
+                formData.append('target_group', forcedTargetGroup);
+            }
             formData.append('csrf_token', csrfToken);
 
             fetch(window.location.href, { method: 'POST', body: formData })
@@ -4530,11 +5078,17 @@ $day ?></label>
                 if (data.success) { 
                     if (button.closest('#dm-chat-form')) dmChatTextarea.value = ''; 
                     else mainChatTextarea.value = ''; 
-                    setTimeout(() => updateChat(false), 500);
-                } else { alert('Failed to send message: ' + data.message); }
+                    void updateChat();
+                } else {
+                    removeOptimisticGatewayMessage(optimisticToken);
+                    alert('Failed to send message: ' + data.message);
+                }
             })
-            .catch(error => { console.error('Error sending message:', error); alert('An error occurred while sending the message.'); 
-})
+            .catch(error => {
+                removeOptimisticGatewayMessage(optimisticToken);
+                console.error('Error sending message:', error);
+                alert('An error occurred while sending the message.');
+            })
             .finally(() => { allButtons.forEach(b => { b.disabled = false; }); button.textContent = originalButtonText; });
         }
 
@@ -4579,11 +5133,17 @@ $day ?></label>
             if (!dmModal) return;
             dmChatTitle.querySelector('span').textContent = `${nodeId} / ${nodeName}`;
             dmTargetNodeIdInput.value = nodeId;
+            if (dmChatUserBtn) {
+                dmChatUserBtn.dataset.nodeName = String(nodeName || nodeId || '');
+            }
+            updateDmChatActionButtons(nodeId);
             dmChatContainer.innerHTML = `<div class="text-center text-slate-500 py-16"><p>Loading messages...</p></div>`;
             dmModal.style.display = 'flex';
             document.body.style.overflow = 'hidden';
-            if (!isPollingActive) { // Start polling if it's not already running
+            if (!isPollingActive) {
                 isPollingActive = true;
+            }
+            if (!isChatPolling) {
                 startChatPolling();
             }
             renderDmChat();
@@ -4597,12 +5157,19 @@ $day ?></label>
             if (!dmModal) return;
             dmModal.style.display = 'none';
             document.body.style.overflow = '';
-            // Stop polling ONLY if the main chat tab is not also active.
-            if (!isChatTabInitialized) {
-                isPollingActive = false;
-                stopChatStream();
+            const activeTab = document.querySelector('.tab-button.active')?.dataset?.tab || '';
+            if (activeTab !== 'chat') {
+                stopChatPolling();
+                if (activeTab === 'status') {
+                    isPollingActive = true;
+                    startStatusPolling();
+                } else {
+                    isPollingActive = false;
+                    stopStatusPolling();
+                }
             }
             dmTargetNodeIdInput.value = '';
+            updateDmChatActionButtons('');
         }
         
         document.body.addEventListener('click', function(event) {
@@ -4631,6 +5198,17 @@ $day ?></label>
             const fullMessage = `@${target} ${text}`;
             sendAjaxMessage(fullMessage, this, true);
         });
+
+        dmChatUserBtn?.addEventListener('click', async function() {
+            const nodeId = dmChatUserBtn.dataset.nodeId || dmTargetNodeIdInput.value || '';
+            const userRecord = await ensureUserRecord(nodeId);
+            closeDmChat();
+            if (userRecord) {
+                openUserEditModal(userRecord);
+                return;
+            }
+            openCreateUserFromDmTarget(nodeId);
+        });
         
         dmChatTextarea?.addEventListener('keydown', function(event) { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); dmChatSendBtn.click(); } });
         
@@ -4657,6 +5235,7 @@ $day ?></label>
         function openUserEditModal(userData) {
             const userEditForm = document.getElementById('user-edit-form');
             if (!userEditModal || !userEditForm) return;
+            setLocalUserRecord(userData?.node_id, userData);
             userModalTitle.textContent = `${userData.node_id} / ${userData.name}`;
             userEditForm.querySelector('input[name="node_id"]').value = userData.node_id;
             document.getElementById('user-modal-delete-form').querySelector('input[name="node_id"]').value = userData.node_id;
@@ -4699,7 +5278,24 @@ $day ?></label>
         
         function closeUserEditModal() { if (!userEditModal) return; userEditModal.style.display = 'none'; document.body.style.overflow = ''; }
         
-        document.querySelectorAll('.open-user-edit-modal').forEach(button => { button.addEventListener('click', function() { openUserEditModal(JSON.parse(this.dataset.userData)); }); });
+        indexUserEditButtonsByNodeId();
+        document.body.addEventListener('click', async (event) => {
+            const button = event.target.closest('.open-user-edit-modal');
+            if (!button) return;
+            const nodeId = String(button.dataset.nodeId || '').trim();
+            if (!nodeId) {
+                return;
+            }
+            let userData = getLocalUserRecord(nodeId);
+            if (!userData) {
+                userData = await fetchUserRecord(nodeId);
+            }
+            if (!userData) {
+                alert(`Unable to load user profile for ${nodeId}.`);
+                return;
+            }
+            openUserEditModal(userData);
+        });
         document.getElementById('address_lat')?.addEventListener('input', updateAddressCoordToggle);
         document.getElementById('address_lon')?.addEventListener('input', updateAddressCoordToggle);
         closeUserModalBtnHeader?.addEventListener('click', closeUserEditModal);

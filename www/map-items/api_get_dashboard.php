@@ -4,12 +4,110 @@
 header('Content-Type: application/json');
 require_once __DIR__ . '/../db.php';
 session_start();
+$gb_perf_start = microtime(true);
+register_shutdown_function(function () use ($gb_perf_start) {
+    $elapsed_ms = (microtime(true) - $gb_perf_start) * 1000;
+    if ($elapsed_ms >= 750) {
+        error_log(sprintf('GuardianBridge Perf: api_get_dashboard %.1fms', $elapsed_ms));
+    }
+});
 
 $is_map_admin = isset($_SESSION['map_loggedin']) && $_SESSION['map_loggedin'] === true;
 $is_mop_operator = isset($_SESSION['mop_loggedin']) && $_SESSION['mop_loggedin'] === true;
 if (!$is_map_admin && !$is_mop_operator) {
     header('HTTP/1.1 403 Forbidden');
     die(json_encode(['error' => 'Authentication required.']));
+}
+
+header('Cache-Control: private, no-cache, must-revalidate');
+header('Vary: Cookie');
+$if_none_match = trim((string)($_SERVER['HTTP_IF_NONE_MATCH'] ?? ''));
+$cache_file = '/opt/GuardianBridge/data/api_dashboard_cache.json';
+$cache_ttl_seconds = 2;
+
+function gb_dashboard_api_read_cache($path, $ttl_seconds) {
+    if (!is_readable($path)) {
+        return null;
+    }
+    $mtime = @filemtime($path);
+    if (!$mtime || (time() - intval($mtime)) > max(0, intval($ttl_seconds))) {
+        return null;
+    }
+    $raw = @file_get_contents($path);
+    if (!is_string($raw) || trim($raw) === '') {
+        return null;
+    }
+    $decoded = json_decode($raw, true);
+    if (!is_array($decoded)) {
+        return null;
+    }
+    $etag = trim((string)($decoded['etag'] ?? ''));
+    $payload_json = $decoded['payload_json'] ?? null;
+    if ($etag === '' || !is_string($payload_json) || $payload_json === '') {
+        return null;
+    }
+    return [
+        'etag' => $etag,
+        'payload_json' => $payload_json,
+    ];
+}
+
+function gb_dashboard_api_write_cache($path, $etag, $payload_json) {
+    $dir = dirname($path);
+    if (!is_dir($dir)) {
+        @mkdir($dir, 0775, true);
+    }
+    if (!is_dir($dir)) {
+        return;
+    }
+    $payload = [
+        'etag' => (string)$etag,
+        'payload_json' => (string)$payload_json,
+        'created_at' => time(),
+    ];
+    try {
+        $suffix = bin2hex(random_bytes(3));
+    } catch (Throwable $e) {
+        $suffix = substr(sha1(uniqid('', true) . microtime(true)), 0, 6);
+    }
+    $tmp = $path . '.tmp.' . getmypid() . '.' . $suffix;
+    $ok = @file_put_contents($tmp, json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+    if ($ok === false) {
+        @unlink($tmp);
+        return;
+    }
+    if (!@rename($tmp, $path)) {
+        @unlink($tmp);
+    }
+}
+
+function gb_dashboard_api_etag_matches($if_none_match, $etag) {
+    $raw = trim((string)$if_none_match);
+    if ($raw === '') {
+        return false;
+    }
+    if ($raw === '*') {
+        return true;
+    }
+    $parts = explode(',', $raw);
+    foreach ($parts as $part) {
+        $candidate = trim($part);
+        if ($candidate === $etag || $candidate === ('W/' . $etag)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+$cached = gb_dashboard_api_read_cache($cache_file, $cache_ttl_seconds);
+if (is_array($cached)) {
+    header('ETag: ' . $cached['etag']);
+    if (gb_dashboard_api_etag_matches($if_none_match, $cached['etag'])) {
+        http_response_code(304);
+        exit;
+    }
+    echo $cached['payload_json'];
+    exit;
 }
 
 // --- CONFIGURATION & FILE PATHS ---
@@ -146,10 +244,11 @@ $weather_age_seconds = get_iso_age_seconds($weather_current['timestamp'] ?? null
 $weather_is_stale = $weather_age_seconds !== null && $weather_age_seconds > ($weather_data_max_age_minutes * 60);
 $weather_age_label = format_age_string($weather_age_seconds);
 $weather_station_id = $weather_current['station_id'] ?? null;
-$sos_log = array_reverse(gb_load_sos_logs(false));
+$sos_log = gb_load_recent_sos_logs(10);
+$active_sos_entries = gb_load_active_sos_logs();
 
 $active_sos_list = [];
-foreach ($sos_log as $entry) {
+foreach ($active_sos_entries as $entry) {
     if (!empty($entry['active'])) {
         $active_sos_list[] = [
             'node_id' => $entry['node_id'] ?? 'N/A',
@@ -199,5 +298,23 @@ $response = [
 ];
 
 // --- OUTPUT JSON ---
-echo json_encode($response);
+$response_json = json_encode($response, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+if (!is_string($response_json)) {
+    $response_json = json_encode([
+        'system_health' => [],
+        'weather_info' => [],
+        'sos_log' => [],
+        'active_sos_list' => [],
+        'active_sos_node_id' => '',
+        'metrics' => [],
+    ]);
+}
+$etag = '"' . sha1($response_json) . '"';
+header('ETag: ' . $etag);
+if (gb_dashboard_api_etag_matches($if_none_match, $etag)) {
+    http_response_code(304);
+    exit;
+}
+gb_dashboard_api_write_cache($cache_file, $etag, $response_json);
+echo $response_json;
 ?>

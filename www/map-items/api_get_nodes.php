@@ -22,6 +22,13 @@
 header('Content-Type: application/json');
 require_once __DIR__ . '/../db.php';
 session_start();
+$gb_perf_start = microtime(true);
+register_shutdown_function(function () use ($gb_perf_start) {
+    $elapsed_ms = (microtime(true) - $gb_perf_start) * 1000;
+    if ($elapsed_ms >= 750) {
+        error_log(sprintf('GuardianBridge Perf: api_get_nodes %.1fms', $elapsed_ms));
+    }
+});
 
 $is_map_admin = isset($_SESSION['map_loggedin']) && $_SESSION['map_loggedin'] === true;
 $is_mop_operator = isset($_SESSION['mop_loggedin']) && $_SESSION['mop_loggedin'] === true;
@@ -34,7 +41,7 @@ header('Cache-Control: private, no-cache, must-revalidate');
 header('Vary: Cookie');
 
 $cache_file = '/opt/GuardianBridge/data/api_nodes_cache.json';
-$cache_ttl_seconds = 1;
+$cache_ttl_seconds = 5;
 $if_none_match = trim((string)($_SERVER['HTTP_IF_NONE_MATCH'] ?? ''));
 
 function gb_nodes_api_read_cache($path, $ttl_seconds) {
@@ -123,18 +130,57 @@ if (is_array($cached)) {
 }
 
 $node_statuses = gb_load_node_statuses();
-$subscribers = gb_load_subscribers();
-$sos_log = gb_load_sos_logs(false);
+$active_sos_raw = gb_load_active_sos_logs();
 $subscribers_mtime = gb_get_subscribers_mtime();
 
-$active_sos_events = [];
-if (is_array($sos_log)) {
-    foreach ($sos_log as $entry) {
-        if (!empty($entry['active'])) {
-            $active_sos_events[] = $entry;
+$required_subscriber_ids = [];
+if (is_array($node_statuses)) {
+    foreach ($node_statuses as $node_id => $_status_row) {
+        $id = trim((string)$node_id);
+        if ($id !== '') {
+            $required_subscriber_ids[$id] = true;
         }
     }
 }
+
+$active_sos_events = [];
+if (is_array($active_sos_raw)) {
+    foreach ($active_sos_raw as $entry) {
+        if (empty($entry['active'])) {
+            continue;
+        }
+        $sos_node_id = trim((string)($entry['node_id'] ?? ''));
+        $responding_list = [];
+        foreach ((array)($entry['responding_list'] ?? []) as $responder_id) {
+            $responder_key = trim((string)$responder_id);
+            if ($responder_key === '') {
+                continue;
+            }
+            $responding_list[] = $responder_key;
+            $required_subscriber_ids[$responder_key] = true;
+        }
+        $acknowledged_by = [];
+        foreach ((array)($entry['acknowledged_by'] ?? []) as $ack_id) {
+            $ack_key = trim((string)$ack_id);
+            if ($ack_key === '') {
+                continue;
+            }
+            $acknowledged_by[] = $ack_key;
+            $required_subscriber_ids[$ack_key] = true;
+        }
+        if ($sos_node_id !== '') {
+            $required_subscriber_ids[$sos_node_id] = true;
+        }
+        $entry['node_id'] = $sos_node_id;
+        $entry['responding_list'] = $responding_list;
+        $entry['acknowledged_by'] = $acknowledged_by;
+        $entry['responding_set'] = array_fill_keys($responding_list, true);
+        $entry['acknowledged_set'] = array_fill_keys($acknowledged_by, true);
+        $active_sos_events[] = $entry;
+    }
+}
+
+$subscribers = gb_load_subscribers_by_ids(array_keys($required_subscriber_ids));
 
 $output_nodes = [];
 $seen_node_ids = [];
@@ -156,12 +202,12 @@ if (is_array($node_statuses)) {
                 $sos_timestamp = $sos['timestamp'] ?? null;
                 break;
             }
-            if (in_array($node_id, $sos['responding_list'] ?? [])) {
+            if (!empty($sos['responding_set'][$node_id])) {
                 $sos_role = 'RESPONDER';
                 $sos_parent = $sos['node_id'];
                 break;
             }
-            if (in_array($node_id, $sos['acknowledged_by'] ?? [])) {
+            if (!empty($sos['acknowledged_set'][$node_id])) {
                 $sos_role = 'ACKNOWLEDGER';
                 $sos_parent = $sos['node_id'];
                 break;
