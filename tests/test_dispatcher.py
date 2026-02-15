@@ -685,6 +685,51 @@ class DispatcherTests(unittest.TestCase):
         self.dispatcher.commands.process_command_jobs(max_jobs=5)
         self.assertEqual(self.dispatcher.gb_db.count_command_dead_letters(), 1)
 
+    def test_sender_worker_excludes_suppressed_wait_samples_from_metrics(self):
+        self.dispatcher.core.latency_metrics["send_queue_wait_ms"].clear()
+        self.dispatcher.core.iface = None
+        original_min_send = self.dispatcher.core.MIN_SEND_INTERVAL_SECONDS
+        self.dispatcher.core.MIN_SEND_INTERVAL_SECONDS = 0.0
+        try:
+            self.dispatcher.core.send_queue.put(
+                {
+                    "text": "startup broadcast",
+                    "destinationId": "!node01",
+                    "_queued_at": time.time() - 5.0,
+                    "_warn_queue_wait": False,
+                }
+            )
+            self.dispatcher.core.send_queue.put(None)
+            self.dispatcher.messaging.sender_thread_worker()
+        finally:
+            self.dispatcher.core.MIN_SEND_INTERVAL_SECONDS = original_min_send
+
+        snapshot = self.dispatcher.core.get_latency_metric_snapshots()["send_queue_wait_ms"]
+        self.assertEqual(snapshot["count"], 0)
+
+    def test_sender_worker_records_wait_samples_when_not_suppressed(self):
+        self.dispatcher.core.latency_metrics["send_queue_wait_ms"].clear()
+        self.dispatcher.core.iface = None
+        original_min_send = self.dispatcher.core.MIN_SEND_INTERVAL_SECONDS
+        self.dispatcher.core.MIN_SEND_INTERVAL_SECONDS = 0.0
+        try:
+            self.dispatcher.core.send_queue.put(
+                {
+                    "text": "direct send",
+                    "destinationId": "!node02",
+                    "_queued_at": time.time() - 5.0,
+                    "_warn_queue_wait": True,
+                }
+            )
+            self.dispatcher.core.send_queue.put(None)
+            self.dispatcher.messaging.sender_thread_worker()
+        finally:
+            self.dispatcher.core.MIN_SEND_INTERVAL_SECONDS = original_min_send
+
+        snapshot = self.dispatcher.core.get_latency_metric_snapshots()["send_queue_wait_ms"]
+        self.assertEqual(snapshot["count"], 1)
+        self.assertIsNotNone(snapshot["p95_ms"])
+
     def test_update_dispatcher_status_includes_alert_metrics(self):
         self.dispatcher.gb_db.enqueue_command_job(
             {"command": "broadcast", "text": "x"},

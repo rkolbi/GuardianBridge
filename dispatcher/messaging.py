@@ -35,12 +35,13 @@ def sender_thread_worker() -> None:
             warn_queue_wait = bool(kwargs.pop("_warn_queue_wait", True))
             if isinstance(queued_at, (int, float)):
                 queue_wait_ms = max(0.0, (time.time() - float(queued_at)) * 1000.0)
-                core.record_latency_sample("send_queue_wait_ms", queue_wait_ms)
-                if warn_queue_wait and queue_wait_ms >= core.SEND_QUEUE_WAIT_WARN_MS:
-                    destination_preview = kwargs.get("destinationId")
-                    logging.warning(
-                        f"Send queue wait high ({queue_wait_ms:.1f}ms) for destination {destination_preview or 'Broadcast'}."
-                    )
+                if warn_queue_wait:
+                    core.record_latency_sample("send_queue_wait_ms", queue_wait_ms)
+                    if queue_wait_ms >= core.SEND_QUEUE_WAIT_WARN_MS:
+                        destination_preview = kwargs.get("destinationId")
+                        logging.warning(
+                            f"Send queue wait high ({queue_wait_ms:.1f}ms) for destination {destination_preview or 'Broadcast'}."
+                        )
 
             start_monotonic = time.perf_counter()
 

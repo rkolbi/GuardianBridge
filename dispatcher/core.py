@@ -616,7 +616,11 @@ def main():
     initial_headlines = {alert.get("headline") for alert in initial_alerts if alert.get("headline")}
     if initial_headlines:
         for headline in initial_headlines:
-            broadcast_to_subscribers(f"{get_alert_emoji(headline)} {headline}", "alerts")
+            broadcast_to_subscribers(
+                f"{get_alert_emoji(headline)} {headline}",
+                "alerts",
+                warn_queue_wait=False,
+            )
         with broadcasted_alert_lock:
             broadcasted_alert_headlines.update(initial_headlines)
         logging.info(f"Broadcasted and initialized with {len(broadcasted_alert_headlines)} known alerts.")

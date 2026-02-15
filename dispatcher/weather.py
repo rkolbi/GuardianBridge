@@ -113,7 +113,11 @@ def handle_new_alert_broadcast() -> None:
         if new_headlines:
             logging.info(f"Found {len(new_headlines)} new alert(s) to broadcast immediately.")
             for headline in new_headlines:
-                broadcast_to_subscribers(f"{get_alert_emoji(headline)} {headline}", "alerts")
+                _broadcast_to_subscribers_with_optional_wait_warning(
+                    f"{get_alert_emoji(headline)} {headline}",
+                    "alerts",
+                    warn_queue_wait=False,
+                )
             core.broadcasted_alert_headlines.update(new_headlines)
         core.broadcasted_alert_headlines.intersection_update(current_headlines)
 
@@ -198,7 +202,11 @@ def handle_nws_alert_broadcasts(now: datetime) -> None:
                 return
             logging.info(f"Sending {len(active_headlines)} active NWS alert reminder(s).")
             for headline in active_headlines:
-                broadcast_to_subscribers(f"{get_alert_emoji(headline)} {headline}", "alerts")
+                _broadcast_to_subscribers_with_optional_wait_warning(
+                    f"{get_alert_emoji(headline)} {headline}",
+                    "alerts",
+                    warn_queue_wait=False,
+                )
             with core.dispatcher_state_lock:
                 core.dispatcher_state["last_nws_alert_reminder"] = now.isoformat()
                 core.save_json(settings.DISPATCHER_STATE_FILE, core.dispatcher_state)

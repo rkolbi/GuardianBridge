@@ -193,6 +193,7 @@ This guide walks you through the complete setup for both the backend services an
     sudo find /opt/GuardianBridge -type f -exec chmod 664 {} \;
     sudo chmod 2775 /opt/GuardianBridge/data
     ```
+    *Replace `pi` with the same Linux user that will run `guardianbridge.service` (`[Service] User=` in Step 4). Mixing writers (for example `root` + service user) can cause `sqlite3.OperationalError: attempt to write a readonly database`.*
     **A system reboot or logging out and back in** is required for the group change to take effect.
 4.  **SQLite database files:** The admin panel reads `data/guardianbridge.db`. Ensure the web server can read this file and the WAL/SHM sidecar files (`guardianbridge.db-wal`, `guardianbridge.db-shm`) created at runtime. Do not run weather/email cron jobs as `root`; mixed DB writers can trigger `sqlite3.OperationalError: attempt to write a readonly database`.
 5.  **Recommended file permissions (after first run creates the DB):**
@@ -256,9 +257,10 @@ This guide walks you through the complete setup for both the backend services an
     sudo systemctl enable guardianbridge.service
     sudo systemctl start guardianbridge.service
     ```
-3.  **Set up Cron Jobs** for periodic tasks in the same user as the dispatcher service (`User=pi` in the unit above):
+3.  **Set up Cron Jobs** for periodic tasks in the same user as the dispatcher service (`User=` in the unit above):
     ```bash
-    sudo -u pi crontab -e
+    SERVICE_USER="$(systemctl show guardianbridge.service -p User --value)"
+    sudo -u "$SERVICE_USER" crontab -e
     
     # Fetch weather data every 15 minutes
     */15 * * * * umask 0002; /usr/bin/python3 /opt/GuardianBridge/weather_fetcher.py >> /opt/GuardianBridge/data/cron.log 2>&1
@@ -302,7 +304,24 @@ This guide walks you through the complete setup for both the backend services an
     ls -lh /opt/GuardianBridge/AutoBackUp/guardianbridge_db_*.db | head -n 3
     ```
 
-4.  **Run release preflight** (recommended gate before production deploy):
+4.  **Clear runtime data safely** (for demos, mock resets, or fresh start):
+
+    ```bash
+    SERVICE_USER="$(systemctl show guardianbridge.service -p User --value)"
+    sudo systemctl stop guardianbridge.service
+    sudo -u "$SERVICE_USER" /opt/GuardianBridge/scripts/clear_all_data.sh --dry-run
+    sudo -u "$SERVICE_USER" /opt/GuardianBridge/scripts/clear_all_data.sh
+    sudo systemctl start guardianbridge.service
+    ```
+
+    Optional (skip backup):
+    ```bash
+    sudo -u "$SERVICE_USER" /opt/GuardianBridge/scripts/clear_all_data.sh --no-backup
+    ```
+
+    *Do not run the clear script as `root` unless you immediately repair ownership afterwards.*
+
+5.  **Run release preflight** (recommended gate before production deploy):
 
     ```bash
     /usr/bin/python3 /opt/GuardianBridge/scripts/pre_release_preflight.py
@@ -313,14 +332,14 @@ This guide walks you through the complete setup for both the backend services an
     - Exit code `1`: warnings present
     - Exit code `2`: hard failure
 
-5.  **Build a release artifact** (code snapshot + checksum + manifest):
+6.  **Build a release artifact** (code snapshot + checksum + manifest):
 
     ```bash
     /usr/bin/python3 /opt/GuardianBridge/scripts/build_release_artifact.py
     ls -lh /opt/GuardianBridge/releases/
     ```
 
-6.  **One-command rollback** (restore latest DB backup and restart service):
+7.  **One-command rollback** (restore latest DB backup and restart service):
 
     ```bash
     /usr/bin/python3 /opt/GuardianBridge/scripts/rollback_guardianbridge.py --yes
@@ -467,7 +486,19 @@ All files are located within the `/opt/GuardianBridge/` directory.
   * **Emails are not being sent/received**: Run `python3 /opt/GuardianBridge/email_processor.py` manually. Check for authentication errors and ensure you are using a correct App Password for Gmail. Check the `data/email_processor.lastrun` file timestamp.
   * **Broadcast email failed**: If you receive a rejection email, check the subscriber record in `guardianbridge.db` (the `subscribers` table) to ensure your email address is listed and the `"emailbroadcast": true` flag is set. You can also verify this in the Admin Panel.
   * **Admin Panel shows "failed to write" or "not readable" errors**: This is almost always a file permissions issue. Ensure the web server user (`www-data`) and dispatcher user both have write access to `/opt/GuardianBridge/data` and `guardianbridge.db`.
-  * **`attempt to write a readonly database` appears in logs**: Ensure `weather_fetcher.py` and `email_processor.py` run in the dispatcher service user's crontab (not `root`). Verify with `systemctl show guardianbridge.service -p User` and `sudo -u <service_user> crontab -l`.
+  * **`attempt to write a readonly database` appears in logs**: This is usually ownership or mixed-writer drift after maintenance/reset. Ensure `weather_fetcher.py` and `email_processor.py` run in the dispatcher service user's crontab (not `root`) and repair `data/` ownership:
+    ```bash
+    SERVICE_USER="$(systemctl show guardianbridge.service -p User --value)"
+    sudo systemctl stop guardianbridge.service
+    sudo mkdir -p /opt/GuardianBridge/data/commands
+    sudo chown -R "$SERVICE_USER":www-data /opt/GuardianBridge/data
+    sudo chmod 2775 /opt/GuardianBridge/data /opt/GuardianBridge/data/commands
+    sudo find /opt/GuardianBridge/data -type f -exec chmod 664 {} \;
+    sudo rm -f /opt/GuardianBridge/data/guardianbridge.db-wal /opt/GuardianBridge/data/guardianbridge.db-shm
+    sudo systemctl start guardianbridge.service
+    sudo -u "$SERVICE_USER" crontab -l
+    sudo crontab -l | egrep 'weather_fetcher|email_processor' || true
+    ```
   * **A user is blocked/unblocked, but it doesn't take effect immediately**: The dispatcher reloads subscribers automatically (about every 30 seconds). If needed, force an immediate apply with `sudo systemctl restart guardianbridge.service`.
   * **Settings changed in panel but not taking effect**: You must restart the main dispatcher service after saving changes to the `.env` file: `sudo systemctl restart guardianbridge.service`.
   * **SOS alert not clearing or not being received by responders**: Verify the node's `sos` status in the `node_status` table and the SOS entries in the `sos_log` table inside `guardianbridge.db`. Ensure responders have the correct tags assigned in the `subscribers` table. Check dispatcher logs for errors during SOS processing or message sending. If an admin clear command was used, verify it was queued and processed in SQLite `command_jobs`.
