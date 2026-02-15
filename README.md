@@ -1,5 +1,4 @@
 # GuardianBridge - System Documentation
-
 ![MOP Home Display](Docs/Images/MOP-HOME-DISPLAY.JPG)
 MOP Home Display: The live Mesh Operator Panel view used for real-time monitoring, incident awareness, and rapid response actions.
 ![MAP Status](Docs/Images/MAP-STATUS.JPG)
