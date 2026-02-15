@@ -1,10 +1,9 @@
 # GuardianBridge - System Documentation
+
 ![MOP Home Display](Docs/Images/MOP-HOME-DISPLAY.JPG)
 MOP Home Display: The live Mesh Operator Panel view used for real-time monitoring, incident awareness, and rapid response actions.
 ![MAP Status](Docs/Images/MAP-STATUS.JPG)
 MAP Status: The Admin Panel status dashboard showing system health, node visibility, and operational state at a glance.
-
-
 
 ## Why GuardianBridge is Essential for Your Community
 
@@ -26,6 +25,7 @@ It acts as a resilient communication hub, ensuring that even when all other syst
   10. Troubleshooting
   11. Project Roadmap
   12. Appendix: UI Image Walkthrough
+
 ## 1\. What is GuardianBridge?
 
 GuardianBridge is a complete, self-contained communication gateway system. It leverages the power of LoRa (Long Range) mesh networking through the Meshtastic platform to create an independent, resilient communication network that your community builds and owns.
@@ -314,13 +314,13 @@ This guide walks you through the complete setup for both the backend services an
     SERVICE_USER="$(systemctl show guardianbridge.service -p User --value)"
     sudo systemctl stop guardianbridge.service
     sudo -u "$SERVICE_USER" /opt/GuardianBridge/scripts/clear_all_data.sh --dry-run
-    sudo -u "$SERVICE_USER" /opt/GuardianBridge/scripts/clear_all_data.sh
+    sudo -u "$SERVICE_USER" /opt/GuardianBridge/scripts/clear_all_data.sh --yes
     sudo systemctl start guardianbridge.service
     ```
 
     Optional (skip backup):
     ```bash
-    sudo -u "$SERVICE_USER" /opt/GuardianBridge/scripts/clear_all_data.sh --no-backup
+    sudo -u "$SERVICE_USER" /opt/GuardianBridge/scripts/clear_all_data.sh --no-backup --yes
     ```
 
     *Do not run the clear script as `root` unless you immediately repair ownership afterwards.*
@@ -513,15 +513,16 @@ This project is in active development. Future enhancements being considered incl
 
   * **Direct SAME/EAS Integration**: Ingesting alert streams directly from NOAA Weather Radio broadcasts for ultimate redundancy, providing a layer of protection that does not depend on any internet connection.
   * **Canned Status Messages**: Implementing quick commands for users to broadcast their status (e.g., "I'm OK," "Need Assistance," "Have Supplies") for rapid community check-ins during an emergency.
+
 ## 12\. Appendix: UI Image Walkthrough
 This appendix keeps the screenshots in one technical reference section while using plain language. Think of it as an operator-friendly map from each UI surface to the backend components it touches.
 ### MAP (Admin Panel)
 ![MAP Login](Docs/Images/MAP-LOGIN.JPG)
-The MAP login view is the authentication front door for administrative control. In production, credentials map to ADMIN_USERNAME and ADMIN_PASSWORD_HASH in .env, and successful login gates access to privileged actions like queue control, user edits, and maintenance operations.
+The MAP login view is the authentication front door for administrative control. In production, credentials map to `ADMIN_USERNAME` and `ADMIN_PASSWORD_HASH` in `.env`, and successful login gates access to privileged actions like queue control, user edits, and maintenance operations.
 ![MAP Status](Docs/Images/MAP-STATUS.JPG)
 This screen is the live health dashboard that aggregates runtime state from API endpoints and cached status files. It surfaces dispatcher/radio health, queue pressure indicators, and node/map visibility so you can quickly determine whether message flow and core services are operating within normal thresholds.
 ![MAP Status Extended](Docs/Images/MAP-STATUS-EXTENDED.JPG)
-The extended status context is where deeper diagnostics become visible, including stale-data signals and failure trends. It is especially useful when validating WEATHER_DATA_MAX_AGE_MINUTES, checking recent cron activity (*.lastrun), and spotting early warning signs before they become delivery-impacting incidents.
+The extended status context is where deeper diagnostics become visible, including stale-data signals and failure trends. It is especially useful when validating `WEATHER_DATA_MAX_AGE_MINUTES`, checking recent cron activity (`*.lastrun`), and spotting early warning signs before they become delivery-impacting incidents.
 ![MAP Chat](Docs/Images/MAP-CHAT.JPG)
 MAP chat is a real-time operator console backed by streaming-first updates with polling fallback for reliability. Under the hood, the UI prefers the event-stream path and gracefully falls back to interval reads, so operators keep continuity even when a browser or network path cannot sustain streaming.
 ![MAP Chat - Different Tag](Docs/Images/MAP-CHAT-DIFF-TAG.JPG)

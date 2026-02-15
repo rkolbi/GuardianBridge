@@ -5,11 +5,7 @@ MOP Home Display: The live Mesh Operator Panel view used for real-time monitorin
 ![MAP Status](Docs/Images/MAP-STATUS.JPG)
 MAP Status: The Admin Panel status dashboard showing system health, node visibility, and operational state at a glance.
 
-
-
 GuardianBridge is a community-resilience communications suite that keeps people connected when traditional infrastructure fails. It pairs long-range LoRa mesh radios (Meshtastic) with a local server to provide messaging, alerts, and coordination even when cellular or broadband are down. When internet is available (for example, via satellite), the system bridges to email and weather services; when it is not, it still operates locally on the mesh.
-
-
 
 ## What It Is
 

@@ -6,16 +6,18 @@ DATA_DIR="${SCRIPT_DIR}/../data"
 NO_BACKUP=0
 BACKUP_DIR=""
 DRY_RUN=0
+ASSUME_YES=0
 
 usage() {
   cat <<'EOF'
-Usage: ./scripts/clear_all_data.sh [--data-dir PATH] [--no-backup] [--backup-dir PATH] [--dry-run]
+Usage: ./scripts/clear_all_data.sh [--data-dir PATH] [--no-backup] [--backup-dir PATH] [--dry-run] [--yes]
 
 Options:
   --data-dir PATH     Data directory to clear (default: ../data relative to script)
   --no-backup         Skip backup creation before deletion
   --backup-dir PATH   Explicit backup directory (default: ../AutoBackUp/data_reset_<timestamp>)
   --dry-run           Show what would be removed without changing files
+  --yes               Confirm destructive deletion
   -h, --help          Show this help
 EOF
 }
@@ -37,6 +39,9 @@ while [[ $# -gt 0 ]]; do
       ;;
     --dry-run)
       DRY_RUN=1
+      ;;
+    --yes)
+      ASSUME_YES=1
       ;;
     -h|--help)
       usage
@@ -72,82 +77,73 @@ assert_writable_dir() {
 targets=()
 while IFS= read -r -d '' path; do
   targets+=("$path")
-done < <(
-  find "$DATA_DIR" -maxdepth 1 -type f \
-    \( -name "*.db" -o -name "*.json" -o -name "*.lastrun" -o -name "*.log" -o -name "guardianbridge.db-wal" -o -name "guardianbridge.db-shm" \) \
-    -print0
-)
-
-command_targets=()
-if [[ -d "$COMMANDS_DIR" ]]; then
-  while IFS= read -r -d '' path; do
-    command_targets+=("$path")
-  done < <(find "$COMMANDS_DIR" -mindepth 1 -maxdepth 1 -print0)
-fi
+done < <(find "$DATA_DIR" -mindepth 1 -maxdepth 1 -print0)
 
 RESOLVED_BACKUP_DIR=""
 if [[ $NO_BACKUP -eq 0 ]]; then
   if [[ -n "$BACKUP_DIR" ]]; then
-    RESOLVED_BACKUP_DIR="$BACKUP_DIR"
+    mkdir -p "$BACKUP_DIR"
+    RESOLVED_BACKUP_DIR="$(cd "$BACKUP_DIR" && pwd)"
   else
     PARENT_DIR="$(cd "$DATA_DIR/.." && pwd)"
     BACKUP_ROOT="${PARENT_DIR}/AutoBackUp"
     RESOLVED_BACKUP_DIR="${BACKUP_ROOT}/data_reset_$(date +%Y%m%d-%H%M%S)"
+    mkdir -p "$RESOLVED_BACKUP_DIR"
+    RESOLVED_BACKUP_DIR="$(cd "$RESOLVED_BACKUP_DIR" && pwd)"
   fi
+
+  case "${RESOLVED_BACKUP_DIR}/" in
+    "${DATA_DIR}/"*)
+      echo "Error: Backup directory cannot be inside data directory: $RESOLVED_BACKUP_DIR" >&2
+      exit 1
+      ;;
+  esac
+fi
+
+commands_entries_count=0
+if [[ -d "$COMMANDS_DIR" ]]; then
+  commands_entries_count="$(find "$COMMANDS_DIR" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')"
 fi
 
 echo
 echo "Data directory: $DATA_DIR"
-echo "Files to remove: ${#targets[@]}"
-echo "commands/ entries to remove: ${#command_targets[@]}"
+echo "Entries to remove: ${#targets[@]}"
+echo "commands/ entries currently present: ${commands_entries_count}"
 if [[ $NO_BACKUP -eq 0 ]]; then
   echo "Backup directory: $RESOLVED_BACKUP_DIR"
 fi
 if [[ $DRY_RUN -eq 1 ]]; then
   echo "Mode: DRY RUN (no files will be changed)"
+else
+  echo "Mode: LIVE RUN"
 fi
 echo
 
 if [[ $DRY_RUN -eq 1 ]]; then
   for path in "${targets[@]}"; do
-    echo "Would remove file: $path"
-  done
-  for path in "${command_targets[@]}"; do
-    echo "Would remove commands entry: $path"
+    echo "Would remove entry: $path"
   done
   exit 0
+fi
+
+if [[ $ASSUME_YES -eq 0 ]]; then
+  echo "Safety check: refusing to delete without --yes." >&2
+  echo "Re-run with --yes after reviewing --dry-run output." >&2
+  exit 1
 fi
 
 assert_writable_dir "$DATA_DIR"
 
 if [[ $NO_BACKUP -eq 0 ]]; then
-  mkdir -p "$RESOLVED_BACKUP_DIR"
   assert_writable_dir "$RESOLVED_BACKUP_DIR"
-
   for path in "${targets[@]}"; do
-    cp -a "$path" "${RESOLVED_BACKUP_DIR}/$(basename "$path")"
+    cp -a "$path" "$RESOLVED_BACKUP_DIR/"
   done
-
-  if [[ -d "$COMMANDS_DIR" ]]; then
-    BACKUP_COMMANDS_DIR="${RESOLVED_BACKUP_DIR}/commands"
-    mkdir -p "$BACKUP_COMMANDS_DIR"
-    for path in "${command_targets[@]}"; do
-      cp -a "$path" "$BACKUP_COMMANDS_DIR/"
-    done
-  fi
 fi
 
 for path in "${targets[@]}"; do
-  rm -f "$path"
+  rm -rf "$path"
 done
-
-if [[ -d "$COMMANDS_DIR" ]]; then
-  while IFS= read -r -d '' path; do
-    rm -rf "$path"
-  done < <(find "$COMMANDS_DIR" -mindepth 1 -maxdepth 1 -print0)
-else
-  mkdir -p "$COMMANDS_DIR"
-fi
 
 mkdir -p "$COMMANDS_DIR"
 
