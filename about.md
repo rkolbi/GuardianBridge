@@ -1,6 +1,15 @@
 # GuardianBridge - About
 
+![MOP Home Display](Docs/Images/MOP-HOME-DISPLAY.JPG)
+MOP Home Display: The live Mesh Operator Panel view used for real-time monitoring, incident awareness, and rapid response actions.
+![MAP Status](Docs/Images/MAP-STATUS.JPG)
+MAP Status: The Admin Panel status dashboard showing system health, node visibility, and operational state at a glance.
+
+
+
 GuardianBridge is a community-resilience communications suite that keeps people connected when traditional infrastructure fails. It pairs long-range LoRa mesh radios (Meshtastic) with a local server to provide messaging, alerts, and coordination even when cellular or broadband are down. When internet is available (for example, via satellite), the system bridges to email and weather services; when it is not, it still operates locally on the mesh.
+
+
 
 ## What It Is
 
@@ -185,3 +194,17 @@ Dispatcher command jobs run from SQLite with retry/backoff, leasing, duplicate-s
 MAP and MOP include dead-letter queue management in Actions (requeue/delete), and health panels now expose dispatcher alerts, queue depth/backlog signals, and latest exception details.
 
 MAP and MOP manual service triggers (weather fetch, email processing) plus MAP database maintenance (backup/restore/vacuum) are now queued as SQLite dispatcher command jobs for safer execution without web-side service control.
+
+## Appendix: About Image Notes
+![MAP Login](Docs/Images/MAP-LOGIN.JPG)
+This is the administrative authentication boundary for the web control plane. Friendly in layout but strict in effect, it protects privileged operations that can alter queue state, subscriber records, and runtime behavior.
+![MAP Status Extended](Docs/Images/MAP-STATUS-EXTENDED.JPG)
+This view packages advanced health and freshness signals into a readable operator dashboard. It helps teams verify that background jobs are current and that queue or service anomalies are detected early.
+![MAP Users Edit](Docs/Images/MAP-USERS-EDIT.JPG)
+This editor is where subscriber metadata becomes operationally useful data. Accurate profile, coordinate, and contact fields improve routing decisions, map rendering quality, and SOS responder context.
+![MOP Home Display](Docs/Images/MOP-HOME-DISPLAY.JPG)
+This is the live operations surface for fast situational awareness. It merges map state, node activity, and service health in a way that supports quick technical decisions without overwhelming the operator.
+![MOP Home SOS Panel](Docs/Images/MOP-HOME-SOS-PANEL.JPG)
+The SOS panel is optimized for incident urgency and response velocity. It keeps critical alert context visible so acknowledgement and escalation actions can happen quickly and consistently.
+![MOP Chat User DM](Docs/Images/MOP-CHAT-USER-DM.JPG)
+This direct-message path is the precise channel for user-specific coordination. It is especially helpful for technical triage, targeted instructions, and confirmation loops that should not appear in public channel traffic.

@@ -1,5 +1,12 @@
 # GuardianBridge - System Documentation
 
+![MOP Home Display](Docs/Images/MOP-HOME-DISPLAY.JPG)
+MOP Home Display: The live Mesh Operator Panel view used for real-time monitoring, incident awareness, and rapid response actions.
+![MAP Status](Docs/Images/MAP-STATUS.JPG)
+MAP Status: The Admin Panel status dashboard showing system health, node visibility, and operational state at a glance.
+
+
+
 ## Why GuardianBridge is Essential for Your Community
 
 In times of severe weather, natural disasters, or infrastructure failure, our most basic systems (cellular networks, internet, and power) are often the first to disappear. This leaves communities disconnected and vulnerable. **GuardianBridge was built to solve this problem.**
@@ -19,9 +26,7 @@ It acts as a resilient communication hub, ensuring that even when all other syst
   9. File Structure
   10. Troubleshooting
   11. Project Roadmap
-
-
-
+  12. Appendix: UI Image Walkthrough
 ## 1\. What is GuardianBridge?
 
 GuardianBridge is a complete, self-contained communication gateway system. It leverages the power of LoRa (Long Range) mesh networking through the Meshtastic platform to create an independent, resilient communication network that your community builds and owns.
@@ -509,3 +514,47 @@ This project is in active development. Future enhancements being considered incl
 
   * **Direct SAME/EAS Integration**: Ingesting alert streams directly from NOAA Weather Radio broadcasts for ultimate redundancy, providing a layer of protection that does not depend on any internet connection.
   * **Canned Status Messages**: Implementing quick commands for users to broadcast their status (e.g., "I'm OK," "Need Assistance," "Have Supplies") for rapid community check-ins during an emergency.
+## 12\. Appendix: UI Image Walkthrough
+This appendix keeps the screenshots in one technical reference section while using plain language. Think of it as an operator-friendly map from each UI surface to the backend components it touches.
+### MAP (Admin Panel)
+![MAP Login](Docs/Images/MAP-LOGIN.JPG)
+The MAP login view is the authentication front door for administrative control. In production, credentials map to ADMIN_USERNAME and ADMIN_PASSWORD_HASH in .env, and successful login gates access to privileged actions like queue control, user edits, and maintenance operations.
+![MAP Status](Docs/Images/MAP-STATUS.JPG)
+This screen is the live health dashboard that aggregates runtime state from API endpoints and cached status files. It surfaces dispatcher/radio health, queue pressure indicators, and node/map visibility so you can quickly determine whether message flow and core services are operating within normal thresholds.
+![MAP Status Extended](Docs/Images/MAP-STATUS-EXTENDED.JPG)
+The extended status context is where deeper diagnostics become visible, including stale-data signals and failure trends. It is especially useful when validating WEATHER_DATA_MAX_AGE_MINUTES, checking recent cron activity (*.lastrun), and spotting early warning signs before they become delivery-impacting incidents.
+![MAP Chat](Docs/Images/MAP-CHAT.JPG)
+MAP chat is a real-time operator console backed by streaming-first updates with polling fallback for reliability. Under the hood, the UI prefers the event-stream path and gracefully falls back to interval reads, so operators keep continuity even when a browser or network path cannot sustain streaming.
+![MAP Chat - Different Tag](Docs/Images/MAP-CHAT-DIFF-TAG.JPG)
+This view is useful for validating group-aware behavior in mixed traffic conditions. It helps confirm that tag-oriented messaging logic is routing to the intended audience and that operational context remains clean when multiple groups and direct messages are active at once.
+![MAP Actions 1](Docs/Images/MAP-ACTIONS%20-%201.JPG)
+The first Actions panel focuses on immediate operational controls that trigger backend work without direct shell access. These controls are designed for safe intervention, typically by enqueueing work rather than running ad hoc side effects in the web process.
+![MAP Actions 2](Docs/Images/MAP-ACTIONS%20-%202.JPG)
+This panel emphasizes queue and delivery hygiene, including visibility into pending and exception paths. It is the practical workspace for reducing backlog risk, reviewing delayed work, and confirming that failed items are being handled through controlled retry flows.
+![MAP Actions 3](Docs/Images/MAP-ACTIONS%20-%203.JPG)
+The third Actions view adds more incident-support controls plus audit-adjacent visibility. During active response, it gives operators a structured way to intervene while preserving traceability and minimizing accidental state drift.
+![MAP Broadcasts](Docs/Images/MAP-BROADCAST.JPG)
+The Broadcasts interface maps directly to scheduled job orchestration rather than one-off manual sends. Operators define cadence and windows, and the dispatcher evaluates due work on schedule, which keeps repeated announcements deterministic and easier to reason about.
+![MAP Broadcast Edit](Docs/Images/MAP-BROADCAST-EDIT.JPG)
+This editor is where a single broadcast job's runtime behavior is tuned in detail. It is ideal for refining interval logic, active windows, and message content while preserving a repeatable configuration that can be reviewed and adjusted over time.
+![MAP Users](Docs/Images/MAP-USERS.JPG)
+The Users view is the control plane for subscriber identity, permissions, and participation state. It consolidates the fields that determine who can receive alerts, send privileged commands, and appear with accurate context across MAP, MOP, and incident workflows.
+![MAP Users Edit](Docs/Images/MAP-USERS-EDIT.JPG)
+This editor exposes high-value operational metadata including coordinates, contact details, and SOS-related profile fields. Keeping these fields accurate directly improves map fidelity, responder targeting, and the quality of automated escalation messages.
+### MOP (Mesh Operator Panel)
+![MOP Login](Docs/Images/MOP-LOGIN.JPG)
+MOP login enforces operator-scoped access so live response tooling is only available to authorized users. This separation keeps real-time incident controls protected while still allowing the broader system to expose non-privileged functionality elsewhere.
+![MOP Home Display](Docs/Images/MOP-HOME-DISPLAY.JPG)
+The MOP home layout is optimized for continuous operations, combining map, node, and health signals in a single glanceable surface. It is designed for shift-based monitoring where quick detection of anomalies matters more than deep navigation.
+![MOP Home SOS Panel](Docs/Images/MOP-HOME-SOS-PANEL.JPG)
+This panel prioritizes emergency context by surfacing active SOS state and response cues prominently. It helps operators move from detection to acknowledgement faster, especially when multiple incident signals compete for attention.
+![MOP Chat](Docs/Images/MOP-CHAT.JPG)
+MOP chat supports rapid tactical communication during live operations, with the same resilient stream-plus-fallback behavior used in MAP. In practice, that means fewer blind spots when connectivity degrades and responders still need timely updates.
+![MOP Chat User DM](Docs/Images/MOP-CHAT-USER-DM.JPG)
+The DM view is the precision channel for one-to-one coordination and verification. It is frequently used for targeted welfare checks, clarifications, and incident-specific instructions that should not be broadcast network-wide.
+![MOP Actions Extended](Docs/Images/MOP-ACTIONS-EXTENDED.JPG)
+Extended Actions in MOP provide power-user incident tools without forcing operators out of the live console. The design reduces context switching so responders can execute corrective actions while maintaining situational awareness.
+![MOP Broadcasts](Docs/Images/MOP-BROADCASTS.JPG)
+This broadcast view gives operators controlled outbound messaging tied to the same scheduling model as MAP. It keeps message timing predictable and reduces ad hoc traffic spikes during high-load operational periods.
+![MOP Users](Docs/Images/MOP-USERS.JPG)
+MOP users is the fast reference for role and participant context during active events. It helps teams quickly verify who is online, who has relevant permissions, and who should be contacted next in a response chain.
