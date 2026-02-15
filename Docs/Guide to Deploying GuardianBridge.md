@@ -67,6 +67,7 @@ sudo chmod 640 /opt/GuardianBridge/.env
 ```
 
 After group changes, log out/in or reboot.
+Do not run weather/email cron jobs as `root`; those jobs must run as `<app_user>` to avoid SQLite readonly write failures.
 
 ## 6. Create Service
 
@@ -83,6 +84,7 @@ User=<app_user>
 Group=<app_group>
 WorkingDirectory=/opt/GuardianBridge
 ExecStart=/usr/bin/python3 /opt/GuardianBridge/meshtastic_dispatcher.py
+UMask=0002
 Restart=on-failure
 RestartSec=10
 
@@ -99,10 +101,16 @@ sudo systemctl start guardianbridge.service
 
 ## 7. Cron Jobs
 
+Install cron entries for the same user that runs `guardianbridge.service`:
 ```bash
-*/15 * * * * /usr/bin/python3 /opt/GuardianBridge/weather_fetcher.py >> /opt/GuardianBridge/data/cron.log 2>&1
-*/5 * * * * /usr/bin/python3 /opt/GuardianBridge/email_processor.py >> /opt/GuardianBridge/data/cron.log 2>&1
+sudo -u <app_user> crontab -e
 ```
+
+```bash
+*/15 * * * * umask 0002; /usr/bin/python3 /opt/GuardianBridge/weather_fetcher.py >> /opt/GuardianBridge/data/cron.log 2>&1
+*/5 * * * * umask 0002; /usr/bin/python3 /opt/GuardianBridge/email_processor.py >> /opt/GuardianBridge/data/cron.log 2>&1
+```
+Do not place these entries in root's crontab.
 
 ## 8. Validation
 
@@ -115,6 +123,14 @@ ls -lh /opt/GuardianBridge/data/guardianbridge.db
 Web checks:
 - MAP: `http://<host>/map.php`
 - MOP: `http://<host>/mop.php`
+
+Post-install readonly-DB check:
+```bash
+SERVICE_USER="$(systemctl show guardianbridge.service -p User --value)"
+sudo -u "$SERVICE_USER" crontab -l
+sudo crontab -l | egrep 'weather_fetcher|email_processor' || true
+sudo journalctl -u guardianbridge.service --since "-30 min" | grep -i "attempt to write a readonly database" || true
+```
 
 ## 9. Notes
 
