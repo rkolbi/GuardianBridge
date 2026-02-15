@@ -3902,10 +3902,12 @@ $recent_audit_entries = gb_load_audit_logs($audit_preview_limit, $audit_scope_pa
                     if (weatherContainer) {
                         const staleLabel = weather.stale ? 'stale' : 'current';
                         const alertText = weather.active_alert || 'No active alerts.';
+                        const forecastText = weather.forecast_summary || 'No forecast data available.';
                         const stationLabel = weather.station_id ? `Station ${weather.station_id}` : '';
                         weatherContainer.innerHTML = `
                             <div>Temp ${escapeHTML(String(weather.temperature_f ?? 'n/a'))} F, Humidity ${escapeHTML(String(weather.humidity ?? 'n/a'))}%</div>
                             <div class="status-muted">Updated ${escapeHTML(String(weather.last_update || 'n/a'))} ${escapeHTML(String(stationLabel))} (${staleLabel})</div>
+                            <div class="status-muted">Forecast ${escapeHTML(String(forecastText))}</div>
                             <div>${escapeHTML(String(alertText))}</div>
                         `;
                     }

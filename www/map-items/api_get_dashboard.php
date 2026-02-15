@@ -118,6 +118,7 @@ $weather_fetcher_lastrun_file = $data_dir . '/weather_fetcher.lastrun';
 $email_processor_lastrun_file = $data_dir . '/email_processor.lastrun';
 $weather_current_file = $data_dir . '/weather_current.json';
 $weather_alerts_file = $data_dir . '/nws_alerts.json'; // Corrected filename
+$weather_forecast_file = $data_dir . '/weather_forecast.json';
 $env_file = $base_dir . '/.env';
 
 // --- HELPER FUNCTIONS ---
@@ -160,6 +161,67 @@ function format_age_string($age_seconds) {
     if ($age_seconds < 60) return $age_seconds . ' seconds ago';
     if ($age_seconds < 3600) return round($age_seconds / 60) . ' minutes ago';
     return round($age_seconds / 3600) . ' hours ago';
+}
+
+function gb_pick_forecast_period($forecast_data) {
+    if (!is_array($forecast_data)) {
+        return null;
+    }
+    $periods = $forecast_data['periods'] ?? null;
+    if (!is_array($periods) || empty($periods)) {
+        return null;
+    }
+
+    $now_ts = time();
+    $next_period = null;
+    $next_start_ts = null;
+
+    foreach ($periods as $period) {
+        if (!is_array($period)) {
+            continue;
+        }
+        $start_ts = strtotime((string)($period['startTime'] ?? ''));
+        $end_ts = strtotime((string)($period['endTime'] ?? ''));
+        if ($start_ts !== false && $end_ts !== false && $now_ts >= $start_ts && $now_ts < $end_ts) {
+            return $period;
+        }
+        if ($start_ts !== false && $start_ts > $now_ts && ($next_start_ts === null || $start_ts < $next_start_ts)) {
+            $next_start_ts = $start_ts;
+            $next_period = $period;
+        }
+    }
+
+    if (is_array($next_period)) {
+        return $next_period;
+    }
+    foreach ($periods as $period) {
+        if (is_array($period)) {
+            return $period;
+        }
+    }
+    return null;
+}
+
+function gb_format_forecast_summary($period) {
+    if (!is_array($period)) {
+        return 'No forecast data available.';
+    }
+    $name = trim((string)($period['name'] ?? 'Forecast'));
+    if ($name === '') {
+        $name = 'Forecast';
+    }
+    $short = trim((string)($period['shortForecast'] ?? 'Unavailable'));
+    if ($short === '') {
+        $short = 'Unavailable';
+    }
+
+    $temp_part = '';
+    if (isset($period['temperature']) && $period['temperature'] !== '' && $period['temperature'] !== null) {
+        $unit = trim((string)($period['temperatureUnit'] ?? 'F'));
+        $temp_part = ', ' . trim((string)$period['temperature']) . $unit;
+    }
+
+    return $name . ': ' . $short . $temp_part;
 }
 
 function get_env_value($file_path, $key, $default_value = null) {
@@ -239,11 +301,15 @@ if ($runtime_last_error) {
 }
 $weather_current = get_locked_json_file($weather_current_file, ['temperature_f' => 'N/A', 'humidity' => 'N/A']);
 $weather_alerts = get_locked_json_file($weather_alerts_file, []);
+$weather_forecast = get_locked_json_file($weather_forecast_file, []);
 $weather_data_max_age_minutes = intval(get_env_value($env_file, 'WEATHER_DATA_MAX_AGE_MINUTES', 120));
 $weather_age_seconds = get_iso_age_seconds($weather_current['timestamp'] ?? null, $weather_current_file);
 $weather_is_stale = $weather_age_seconds !== null && $weather_age_seconds > ($weather_data_max_age_minutes * 60);
 $weather_age_label = format_age_string($weather_age_seconds);
 $weather_station_id = $weather_current['station_id'] ?? null;
+$weather_forecast_period = gb_pick_forecast_period($weather_forecast);
+$weather_forecast_summary = gb_format_forecast_summary($weather_forecast_period);
+$weather_forecast_period_name = trim((string)($weather_forecast_period['name'] ?? ''));
 $sos_log = gb_load_recent_sos_logs(10);
 $active_sos_entries = gb_load_active_sos_logs();
 
@@ -284,9 +350,11 @@ $response = [
         'email_processor_last_run' => get_file_age_string($email_processor_lastrun_file),
     ],
     'weather_info' => [
-        'temperature_f' => htmlspecialchars($weather_current['temperature_f'] ?? 'N/A'),
-        'humidity' => htmlspecialchars($weather_current['humidity'] ?? 'N/A'),
-        'active_alert' => !empty($weather_alerts) && isset($weather_alerts[0]['headline']) ? htmlspecialchars($weather_alerts[0]['headline']) : 'No active alerts.',
+        'temperature_f' => (string)($weather_current['temperature_f'] ?? 'N/A'),
+        'humidity' => (string)($weather_current['humidity'] ?? 'N/A'),
+        'active_alert' => !empty($weather_alerts) && isset($weather_alerts[0]['headline']) ? (string)$weather_alerts[0]['headline'] : 'No active alerts.',
+        'forecast_summary' => $weather_forecast_summary,
+        'forecast_period' => $weather_forecast_period_name,
         'last_update' => $weather_age_label,
         'stale' => $weather_is_stale,
         'station_id' => $weather_station_id

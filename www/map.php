@@ -243,6 +243,7 @@ $subscribers_file = $data_dir . '/subscribers.json';
 $dispatcher_file = $data_dir . '/dispatcher_jobs.json';
 $weather_current_file = $data_dir . '/weather_current.json';
 $weather_alerts_file = $data_dir . '/nws_alerts.json';
+$weather_forecast_file = $data_dir . '/weather_forecast.json';
 $dispatcher_status_file = $data_dir . '/dispatcher_status.json';
 $weather_fetcher_lastrun_file = $data_dir . '/weather_fetcher.lastrun';
 $email_processor_lastrun_file = $data_dir . '/email_processor.lastrun';
@@ -333,6 +334,67 @@ function format_age_string($age_seconds) {
     if ($age_seconds < 60) return $age_seconds . ' seconds ago';
     if ($age_seconds < 3600) return round($age_seconds / 60) . ' minutes ago';
     return round($age_seconds / 3600) . ' hours ago';
+}
+
+function gb_pick_forecast_period($forecast_data) {
+    if (!is_array($forecast_data)) {
+        return null;
+    }
+    $periods = $forecast_data['periods'] ?? null;
+    if (!is_array($periods) || empty($periods)) {
+        return null;
+    }
+
+    $now_ts = time();
+    $next_period = null;
+    $next_start_ts = null;
+
+    foreach ($periods as $period) {
+        if (!is_array($period)) {
+            continue;
+        }
+        $start_ts = strtotime((string)($period['startTime'] ?? ''));
+        $end_ts = strtotime((string)($period['endTime'] ?? ''));
+        if ($start_ts !== false && $end_ts !== false && $now_ts >= $start_ts && $now_ts < $end_ts) {
+            return $period;
+        }
+        if ($start_ts !== false && $start_ts > $now_ts && ($next_start_ts === null || $start_ts < $next_start_ts)) {
+            $next_start_ts = $start_ts;
+            $next_period = $period;
+        }
+    }
+
+    if (is_array($next_period)) {
+        return $next_period;
+    }
+    foreach ($periods as $period) {
+        if (is_array($period)) {
+            return $period;
+        }
+    }
+    return null;
+}
+
+function gb_format_forecast_summary($period) {
+    if (!is_array($period)) {
+        return 'No forecast data available.';
+    }
+    $name = trim((string)($period['name'] ?? 'Forecast'));
+    if ($name === '') {
+        $name = 'Forecast';
+    }
+    $short = trim((string)($period['shortForecast'] ?? 'Unavailable'));
+    if ($short === '') {
+        $short = 'Unavailable';
+    }
+
+    $temp_part = '';
+    if (isset($period['temperature']) && $period['temperature'] !== '' && $period['temperature'] !== null) {
+        $unit = trim((string)($period['temperatureUnit'] ?? 'F'));
+        $temp_part = ', ' . trim((string)$period['temperature']) . $unit;
+    }
+
+    return $name . ': ' . $short . $temp_part;
 }
 
 function write_json_atomic($file_path, $data) {
@@ -1380,6 +1442,7 @@ $subscribers = [];
 $dispatcher_jobs = get_dispatcher_jobs($dispatcher_file);
 $weather_current = get_locked_json_file($weather_current_file, []);
 $weather_alerts = get_locked_json_file($weather_alerts_file, []);
+$weather_forecast = get_locked_json_file($weather_forecast_file, []);
 $outgoing_emails = gb_load_outgoing_emails($queue_preview_limit);
 $outgoing_quarantine = gb_load_outgoing_emails_quarantine($queue_preview_limit);
 $failed_dms = gb_load_failed_dm_queue($queue_preview_limit);
@@ -1397,6 +1460,8 @@ $weather_age_seconds = get_iso_age_seconds($weather_current['timestamp'] ?? null
 $weather_is_stale = $weather_age_seconds !== null && $weather_age_seconds > ($weather_data_max_age_minutes * 60);
 $weather_age_label = format_age_string($weather_age_seconds);
 $weather_station_id = $weather_current['station_id'] ?? null;
+$weather_forecast_period = gb_pick_forecast_period($weather_forecast);
+$weather_forecast_summary = gb_format_forecast_summary($weather_forecast_period);
 $db_counts = [
     'dispatcher_jobs' => count($dispatcher_jobs),
     'outgoing_emails' => count($outgoing_emails),
@@ -1684,6 +1749,10 @@ text-lg">●</span> Weather Fetcher Cron (Last run: ' . get_file_age_string($wea
                                     <span class="ml-2 font-semibold">STALE</span>
                                 <?php endif; ?>
                             </p>
+                        </div>
+                        <div class="mt-4">
+                            <h3 class="font-semibold text-lg text-cyan-400">Forecast</h3>
+                            <p class="text-slate-300 mt-1"><?= htmlspecialchars($weather_forecast_summary) ?></p>
                         </div>
                         <div class="mt-4">
                             <h3 class="font-semibold text-lg text-yellow-400">Active NWS Alerts</h3>
@@ -2941,20 +3010,29 @@ $day ?></label>
                 // 2. Update Weather & Alerts Panel
                 const weatherContainer = document.getElementById('weather-card');
                 if (weatherContainer) {
-                    const weather = data.weather_info;
-                    const stationLabel = weather.station_id ? `· Station ${escapeHTML(String(weather.station_id))}` : '';
+                    const weather = data.weather_info || {};
+                    const stationLabel = weather.station_id ? `&middot; Station ${escapeHTML(String(weather.station_id))}` : '';
                     const staleLabel = weather.stale ? '<span class="ml-2 font-semibold">STALE</span>' : '';
                     const updatedClass = weather.stale ? 'text-red-400' : 'text-slate-500';
+                    const tempLabel = escapeHTML(String(weather.temperature_f ?? 'N/A'));
+                    const humidityLabel = escapeHTML(String(weather.humidity ?? 'N/A'));
+                    const updatedLabel = escapeHTML(String(weather.last_update || 'n/a'));
+                    const forecastSummary = escapeHTML(String(weather.forecast_summary || 'No forecast data available.'));
+                    const alertSummary = escapeHTML(String(weather.active_alert || 'No active alerts.'));
                     weatherContainer.innerHTML = `
                         <h2 class="text-2xl font-bold mb-4 text-slate-100">Weather & Alerts</h2>
                         <div>
                             <h3 class="font-semibold text-lg text-blue-400">Current Weather</h3>
-                            <p class="text-slate-300 mt-1">Temp: <span class="font-medium text-slate-100">${weather.temperature_f}°F</span>, Humidity: <span class="font-medium text-slate-100">${weather.humidity}% RH</span></p>
-                            <p class="text-xs mt-2 ${updatedClass}">Updated: ${weather.last_update} ${stationLabel} ${staleLabel}</p>
+                            <p class="text-slate-300 mt-1">Temp: <span class="font-medium text-slate-100">${tempLabel}&deg;F</span>, Humidity: <span class="font-medium text-slate-100">${humidityLabel}% RH</span></p>
+                            <p class="text-xs mt-2 ${updatedClass}">Updated: ${updatedLabel} ${stationLabel} ${staleLabel}</p>
+                        </div>
+                        <div class="mt-4">
+                            <h3 class="font-semibold text-lg text-cyan-400">Forecast</h3>
+                            <p class="text-slate-300 mt-1">${forecastSummary}</p>
                         </div>
                         <div class="mt-4">
                             <h3 class="font-semibold text-lg text-yellow-400">Active NWS Alerts</h3>
-                            <p class="text-slate-300 mt-1">${weather.active_alert}</p>
+                            <p class="text-slate-300 mt-1">${alertSummary}</p>
                         </div>
                     `;
                 }
