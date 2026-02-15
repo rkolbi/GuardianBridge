@@ -536,6 +536,19 @@ def record_runtime_error(source: str, message: str) -> None:
         }
 
 
+def clear_runtime_error(source_prefix: str | None = None) -> None:
+    prefix = str(source_prefix or "").strip()
+    with runtime_error_lock:
+        global runtime_last_error
+        if not isinstance(runtime_last_error, dict):
+            return
+        if prefix:
+            source = str(runtime_last_error.get("source") or "")
+            if not source.startswith(prefix):
+                return
+        runtime_last_error = None
+
+
 def run_auto_db_backup(now=None):
     interval_hours = max(0, int(getattr(settings, "AUTO_BACKUP_INTERVAL_HOURS", 6)))
     if interval_hours <= 0:
@@ -558,6 +571,7 @@ def run_periodic_task(target_func, interval_seconds, name):
         try:
             now = datetime.now(local_tz)
             target_func(now)
+            clear_runtime_error(f"periodic:{name}")
         except Exception as e:
             logging.error(f"Error in periodic task '{name}': {e}", exc_info=True)
             record_runtime_error(f"periodic:{name}", str(e))

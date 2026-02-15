@@ -2,7 +2,7 @@
 
 ## Overview
 
-GuardianBridge is split into a core dispatcher package and supporting scripts. The dispatcher owns Meshtastic I/O, command handling, SOS workflows, and scheduled broadcasts. Supporting scripts (email processor, weather fetcher) are isolated and communicate via files in `data/`.
+GuardianBridge is split into a core dispatcher package and supporting scripts. The dispatcher owns Meshtastic I/O, command handling, SOS workflows, and scheduled broadcasts. Supporting scripts (email processor, weather fetcher) are isolated and exchange state through SQLite (`data/guardianbridge.db`) plus JSON status/cache files in `data/`.
 
 ## Module Map
 

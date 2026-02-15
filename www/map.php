@@ -42,6 +42,7 @@ if ($admin_username === '') {
 $admin_password_hash = trim((string)($admin_env['ADMIN_PASSWORD_HASH'] ?? ''));
 $admin_hash_info = password_get_info($admin_password_hash);
 $is_admin_hash_configured = ($admin_password_hash !== '' && !empty($admin_hash_info['algo']));
+$is_default_admin_password = false;
 
 ini_set('session.use_strict_mode', '1');
 ini_set('session.use_only_cookies', '1');
@@ -80,6 +81,39 @@ function map_get_client_ip() {
     return substr($ip, 0, 64);
 }
 
+function map_safe_get_login_failure_stats($panel, $principal, $remote_addr, $window_seconds) {
+    try {
+        return gb_get_recent_login_failure_stats($panel, $principal, $remote_addr, $window_seconds);
+    } catch (Throwable $e) {
+        error_log('GuardianBridge Warning [map login stats]: ' . $e->getMessage());
+        return ['count' => 0, 'oldest' => 0];
+    }
+}
+
+function map_safe_record_login_failure($panel, $principal, $remote_addr, $created_at) {
+    try {
+        gb_record_login_failure($panel, $principal, $remote_addr, $created_at);
+    } catch (Throwable $e) {
+        error_log('GuardianBridge Warning [map login record]: ' . $e->getMessage());
+    }
+}
+
+function map_safe_clear_login_failures($panel, $principal, $remote_addr) {
+    try {
+        gb_clear_login_failures($panel, $principal, $remote_addr);
+    } catch (Throwable $e) {
+        error_log('GuardianBridge Warning [map login clear]: ' . $e->getMessage());
+    }
+}
+
+function map_safe_prune_login_failures() {
+    try {
+        gb_prune_login_failures();
+    } catch (Throwable $e) {
+        error_log('GuardianBridge Warning [map login prune]: ' . $e->getMessage());
+    }
+}
+
 $login_error = '';
 $max_login_attempts = 5;
 $login_lockout_seconds = 300;
@@ -90,8 +124,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     $principal = ($username !== '') ? $username : '__EMPTY__';
     $client_ip = map_get_client_ip();
 
-    $principal_stats = gb_get_recent_login_failure_stats('map', $principal, $client_ip, $login_lockout_seconds);
-    $ip_stats = gb_get_recent_login_failure_stats('map', '__ANY__', $client_ip, $login_lockout_seconds);
+    $principal_stats = map_safe_get_login_failure_stats('map', $principal, $client_ip, $login_lockout_seconds);
+    $ip_stats = map_safe_get_login_failure_stats('map', '__ANY__', $client_ip, $login_lockout_seconds);
 
     $locked_out = ($principal_stats['count'] >= $max_login_attempts) || ($ip_stats['count'] >= $max_login_attempts);
     if ($locked_out) {
@@ -109,17 +143,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     } else {
         if ($username === $admin_username && $password !== '' && password_verify($password, $admin_password_hash)) {
             $_SESSION['map_loggedin'] = true;
-            gb_clear_login_failures('map', $principal, $client_ip);
-            gb_clear_login_failures('map', '__ANY__', $client_ip);
-            gb_prune_login_failures();
+            map_safe_clear_login_failures('map', $principal, $client_ip);
+            map_safe_clear_login_failures('map', '__ANY__', $client_ip);
+            map_safe_prune_login_failures();
             session_regenerate_id(true);
             header('Location: ' . strtok($_SERVER["REQUEST_URI"], '?'));
             exit;
         } else {
             $login_error = 'Invalid username or password.';
-            gb_record_login_failure('map', $principal, $client_ip, $now_ts);
-            gb_record_login_failure('map', '__ANY__', $client_ip, $now_ts);
-            gb_prune_login_failures();
+            map_safe_record_login_failure('map', $principal, $client_ip, $now_ts);
+            map_safe_record_login_failure('map', '__ANY__', $client_ip, $now_ts);
+            map_safe_prune_login_failures();
         }
     }
 }
@@ -582,7 +616,7 @@ if (isset($_POST['ajax']) && $_POST['ajax'] === 'true') {
                         $destination_id = null;
                         $target_tag = strtoupper($target_str);
                         $tag_found = false;
-                        if (preg_match('/^![a-f0-9]{8}$/', $target_str)) {
+                        if (preg_match('/^![a-f0-9]{8}$/i', $target_str)) {
                             $destination_id = $target_str;
                         } else {
                             foreach ($subscribers as $node_id => $user_data) {
@@ -1794,11 +1828,21 @@ Weather Now</button></form>
                             <?php endif; ?>
                             <div class="space-y-2 max-h-60 overflow-y-auto border border-slate-700 rounded-md p-3">
                                 <?php foreach($failed_dms as $dm): ?>
+                                    <?php
+                                        $dm_destination = (string)($dm['destination_id'] ?? '');
+                                        $dm_text = (string)($dm['text'] ?? '');
+                                        $dm_timestamp_raw = trim((string)($dm['timestamp'] ?? ''));
+                                        $dm_timestamp_unix = ($dm_timestamp_raw !== '') ? strtotime($dm_timestamp_raw) : false;
+                                        if ($dm_timestamp_unix === false) {
+                                            $dm_timestamp_display = ($dm_timestamp_raw !== '') ? $dm_timestamp_raw : 'Unknown';
+                                        } else {
+                                            $dm_timestamp_display = date('Y-m-d H:i:s', $dm_timestamp_unix);
+                                        }
+                                    ?>
                                     <div class="bg-black/20 p-3 rounded text-sm">
-                                        <span class="font-medium text-slate-300">To:</span> <span class="text-slate-400 font-mono"><?= htmlspecialchars($dm['destination_id']) ?></span><br>
-                                        <span class="font-medium text-slate-300">Queued:</span> <span class="text-slate-400"><?= htmlspecialchars(date("Y-m-d H:i:s",
-strtotime($dm['timestamp']))) ?></span><br>
-                                        <span class="font-medium text-slate-300">Text:</span> <span class="text-slate-400"><?= htmlspecialchars($dm['text']) ?></span>                       
+                                        <span class="font-medium text-slate-300">To:</span> <span class="text-slate-400 font-mono"><?= htmlspecialchars($dm_destination) ?></span><br>
+                                        <span class="font-medium text-slate-300">Queued:</span> <span class="text-slate-400"><?= htmlspecialchars($dm_timestamp_display) ?></span><br>
+                                        <span class="font-medium text-slate-300">Text:</span> <span class="text-slate-400"><?= htmlspecialchars($dm_text) ?></span>
             </div>
                                 <?php endforeach; ?>
                             </div>
@@ -4642,9 +4686,16 @@ $day ?></label>
             if (!targetNodeId) { dmChatContainer.innerHTML = ''; updateDmChatActionButtons(''); return; };
             updateDmChatActionButtons(targetNodeId);
             const targetName = lastFetchedSubscribers[targetNodeId]?.name || targetNodeId;
+            const normalizedTargetNodeId = normalizeTagName(targetNodeId);
+            const normalizedTargetName = normalizeTagName(targetName);
             const filteredMessages = lastFetchedMessages.filter(msg => {
-                const gatewayToUserRegex = new RegExp(`^@${escapeRegExp(targetName)}\\s`, 'i');
-                const fromGatewayToUser = msg.from === 'GATEWAY' && gatewayToUserRegex.test((msg.text || '').replace(/^\x07/, ''));
+                const mentionTarget = getMessageMentionTarget(msg.text || '');
+                const fromGatewayToUser = msg.from === 'GATEWAY'
+                    && mentionTarget !== ''
+                    && (
+                        mentionTarget === normalizedTargetNodeId
+                        || (normalizedTargetName !== '' && mentionTarget === normalizedTargetName)
+                    );
                 // A DM from a user to the gateway is identified by the sender's ID and the `is_dm` flag.
                 const fromUserToGateway = msg.from === targetNodeId && msg.is_dm;
                 return fromUserToGateway || fromGatewayToUser; // Show messages from the user to the gateway, or from the gateway to the user.
@@ -5136,14 +5187,14 @@ $day ?></label>
         dmChatForm?.addEventListener('submit', function(e) { 
             e.preventDefault(); 
             const text = dmChatTextarea.value.trim();
-            const target = lastFetchedSubscribers[dmTargetNodeIdInput.value]?.name || dmTargetNodeIdInput.value;
+            const target = String(dmTargetNodeIdInput.value || '').trim();
             const fullMessage = `@${target} ${text}`;
             sendAjaxMessage(fullMessage, dmChatSendBtn, false); 
         });
         
         dmChatBellBtn?.addEventListener('click', function() { 
             const text = dmChatTextarea.value.trim(); 
-            const target = lastFetchedSubscribers[dmTargetNodeIdInput.value]?.name || dmTargetNodeIdInput.value;
+            const target = String(dmTargetNodeIdInput.value || '').trim();
             const fullMessage = `@${target} ${text}`;
             sendAjaxMessage(fullMessage, this, true);
         });

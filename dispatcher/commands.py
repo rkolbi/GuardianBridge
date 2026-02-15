@@ -1099,6 +1099,7 @@ def process_command_jobs(max_jobs: Optional[int] = None) -> int:
     default_batch = max(1, int(getattr(settings, "COMMAND_JOB_BATCH_SIZE", 20)))
     max_to_process = max(1, int(max_jobs if max_jobs is not None else default_batch))
     processed_count = 0
+    had_error = False
 
     for _ in range(max_to_process):
         job = gb_db.claim_next_command_job(lease_seconds=lease_seconds)
@@ -1125,6 +1126,7 @@ def process_command_jobs(max_jobs: Optional[int] = None) -> int:
                 details=details,
             )
         except CommandPayloadError as payload_error:
+            had_error = True
             dead_details = dict(payload_error.details or {})
             dead_details.setdefault("command", payload.get("command"))
             dead_details["job_id"] = job_id
@@ -1140,6 +1142,7 @@ def process_command_jobs(max_jobs: Optional[int] = None) -> int:
                 details=dead_details,
             )
         except Exception as e:
+            had_error = True
             retry_details = {
                 "command": payload.get("command"),
                 "job_id": job_id,
@@ -1182,5 +1185,8 @@ def process_command_jobs(max_jobs: Optional[int] = None) -> int:
                     f"Command job failed, retry scheduled (command_id={command_id}, attempts={attempt_count}/{max_attempts}, delay={retry_delay}s): {e}"
                 )
             core.record_runtime_error("process_command_jobs", str(e))
+
+    if not had_error:
+        core.clear_runtime_error("process_command_jobs")
 
     return processed_count

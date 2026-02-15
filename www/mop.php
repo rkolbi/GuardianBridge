@@ -134,6 +134,39 @@ function mop_get_client_ip() {
     return substr($ip, 0, 64);
 }
 
+function mop_safe_get_login_failure_stats($panel, $principal, $remote_addr, $window_seconds) {
+    try {
+        return gb_get_recent_login_failure_stats($panel, $principal, $remote_addr, $window_seconds);
+    } catch (Throwable $e) {
+        error_log('GuardianBridge Warning [mop login stats]: ' . $e->getMessage());
+        return ['count' => 0, 'oldest' => 0];
+    }
+}
+
+function mop_safe_record_login_failure($panel, $principal, $remote_addr, $created_at) {
+    try {
+        gb_record_login_failure($panel, $principal, $remote_addr, $created_at);
+    } catch (Throwable $e) {
+        error_log('GuardianBridge Warning [mop login record]: ' . $e->getMessage());
+    }
+}
+
+function mop_safe_clear_login_failures($panel, $principal, $remote_addr) {
+    try {
+        gb_clear_login_failures($panel, $principal, $remote_addr);
+    } catch (Throwable $e) {
+        error_log('GuardianBridge Warning [mop login clear]: ' . $e->getMessage());
+    }
+}
+
+function mop_safe_prune_login_failures() {
+    try {
+        gb_prune_login_failures();
+    } catch (Throwable $e) {
+        error_log('GuardianBridge Warning [mop login prune]: ' . $e->getMessage());
+    }
+}
+
 $login_error = '';
 $max_login_attempts = 5;
 $login_lockout_seconds = 300;
@@ -144,8 +177,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     $principal = ($selected_user !== '') ? $selected_user : '__EMPTY__';
     $client_ip = mop_get_client_ip();
 
-    $principal_stats = gb_get_recent_login_failure_stats('mop', $principal, $client_ip, $login_lockout_seconds);
-    $ip_stats = gb_get_recent_login_failure_stats('mop', '__ANY__', $client_ip, $login_lockout_seconds);
+    $principal_stats = mop_safe_get_login_failure_stats('mop', $principal, $client_ip, $login_lockout_seconds);
+    $ip_stats = mop_safe_get_login_failure_stats('mop', '__ANY__', $client_ip, $login_lockout_seconds);
 
     $locked_out = ($principal_stats['count'] >= $max_login_attempts) || ($ip_stats['count'] >= $max_login_attempts);
     if ($locked_out) {
@@ -175,18 +208,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $_SESSION['mop_loggedin'] = true;
                 $_SESSION['operator_user'] = $selected_user;
                 $_SESSION['operator_name'] = $available_users[$selected_user]['name'] ?? $selected_user;
-                gb_clear_login_failures('mop', $principal, $client_ip);
-                gb_clear_login_failures('mop', '__ANY__', $client_ip);
-                gb_prune_login_failures();
+                mop_safe_clear_login_failures('mop', $principal, $client_ip);
+                mop_safe_clear_login_failures('mop', '__ANY__', $client_ip);
+                mop_safe_prune_login_failures();
                 session_regenerate_id(true);
                 header('Location: ' . strtok($_SERVER['REQUEST_URI'], '?'));
                 exit;
             }
         }
         if ($login_error !== '') {
-            gb_record_login_failure('mop', $principal, $client_ip, $now_ts);
-            gb_record_login_failure('mop', '__ANY__', $client_ip, $now_ts);
-            gb_prune_login_failures();
+            mop_safe_record_login_failure('mop', $principal, $client_ip, $now_ts);
+            mop_safe_record_login_failure('mop', '__ANY__', $client_ip, $now_ts);
+            mop_safe_prune_login_failures();
         }
     }
 }
@@ -482,7 +515,7 @@ if (isset($_POST['ajax']) && $_POST['ajax'] === 'true') {
                         $destination_id = null;
                         $target_tag = strtoupper($target_str);
                         $tag_found = false;
-                        if (preg_match('/^![a-f0-9]{8}$/', $target_str)) {
+                        if (preg_match('/^![a-f0-9]{8}$/i', $target_str)) {
                             $destination_id = $target_str;
                         } else {
                             foreach ($subscribers as $node_id => $user_data) {
@@ -4705,9 +4738,16 @@ $recent_audit_entries = gb_load_audit_logs($audit_preview_limit, $audit_scope_pa
                     dmChatUserBtn.disabled = false;
                 }
                 const targetName = lastFetchedSubscribers[targetNodeId]?.name || targetNodeId;
+                const normalizedTargetNodeId = normalizeTagName(targetNodeId);
+                const normalizedTargetName = normalizeTagName(targetName);
                 const filteredMessages = lastFetchedMessages.filter(msg => {
-                    const gatewayToUserRegex = new RegExp(`^@${escapeRegExp(targetName)}\\s`, 'i');
-                    const fromGatewayToUser = msg.from === 'GATEWAY' && gatewayToUserRegex.test((msg.text || '').replace(/^\x07/, ''));
+                    const mentionTarget = getMessageMentionTarget(msg.text || '');
+                    const fromGatewayToUser = msg.from === 'GATEWAY'
+                        && mentionTarget !== ''
+                        && (
+                            mentionTarget === normalizedTargetNodeId
+                            || (normalizedTargetName !== '' && mentionTarget === normalizedTargetName)
+                        );
                     const fromUserToGateway = msg.from === targetNodeId && msg.is_dm;
                     return fromUserToGateway || fromGatewayToUser;
                 });
@@ -5881,13 +5921,13 @@ $recent_audit_entries = gb_load_audit_logs($audit_preview_limit, $audit_scope_pa
             document.getElementById('dm-chat-form').addEventListener('submit', function(e) {
                 e.preventDefault();
                 const text = dmChatTextarea.value.trim();
-                const target = lastFetchedSubscribers[dmTargetNodeIdInput.value]?.name || dmTargetNodeIdInput.value;
+                const target = String(dmTargetNodeIdInput.value || '').trim();
                 const fullMessage = `@${target} ${text}`;
                 sendAjaxMessage(fullMessage, document.getElementById('dm-chat-send-btn'), false);
             });
             document.getElementById('dm-chat-bell-btn').addEventListener('click', function() {
                 const text = dmChatTextarea.value.trim();
-                const target = lastFetchedSubscribers[dmTargetNodeIdInput.value]?.name || dmTargetNodeIdInput.value;
+                const target = String(dmTargetNodeIdInput.value || '').trim();
                 const fullMessage = `@${target} ${text}`;
                 sendAjaxMessage(fullMessage, this, true);
             });

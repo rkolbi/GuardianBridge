@@ -5,6 +5,70 @@ function gb_db_path() {
     return '/opt/GuardianBridge/data/guardianbridge.db';
 }
 
+function gb_db_warn_once($key, $message) {
+    static $seen = [];
+    if (isset($seen[$key])) {
+        return;
+    }
+    $seen[$key] = true;
+    error_log($message);
+}
+
+function gb_db_is_readonly_error($e) {
+    $message = strtolower((string)($e ? $e->getMessage() : ''));
+    if ($message === '') {
+        return false;
+    }
+    if (strpos($message, 'readonly') !== false) {
+        return true;
+    }
+    if (strpos($message, 'attempt to write a readonly database') !== false) {
+        return true;
+    }
+    return false;
+}
+
+function gb_db_schema_ready(PDO $pdo) {
+    $required_tables = [
+        'subscribers',
+        'node_status',
+        'chat_log',
+        'sos_log',
+        'dispatcher_jobs',
+        'outgoing_emails',
+        'outgoing_emails_quarantine',
+        'failed_dm_queue',
+        'temp_groups',
+        'command_receipts',
+        'command_dead_letters',
+        'command_jobs',
+        'audit_log',
+        'login_failures',
+    ];
+
+    try {
+        $placeholders = implode(',', array_fill(0, count($required_tables), '?'));
+        $stmt = $pdo->prepare('SELECT COUNT(DISTINCT name) AS cnt FROM sqlite_master WHERE type = \'table\' AND name IN (' . $placeholders . ')');
+        $stmt->execute($required_tables);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        $count = intval($row['cnt'] ?? 0);
+        if ($count !== count($required_tables)) {
+            return false;
+        }
+
+        $cols = $pdo->query('PRAGMA table_info(temp_groups)')->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($cols as $col) {
+            if (($col['name'] ?? '') === 'locked') {
+                return true;
+            }
+        }
+    } catch (Throwable $e) {
+        return false;
+    }
+
+    return false;
+}
+
 function gb_db() {
     static $pdo = null;
     if ($pdo instanceof PDO) {
@@ -14,10 +78,38 @@ function gb_db() {
     $pdo = new PDO('sqlite:' . gb_db_path());
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
     $pdo->setAttribute(PDO::ATTR_TIMEOUT, 5);
-    $pdo->exec('PRAGMA journal_mode=WAL;');
     $pdo->exec('PRAGMA busy_timeout=5000;');
     $pdo->exec('PRAGMA foreign_keys=ON;');
-    gb_init_db($pdo);
+
+    try {
+        $pdo->exec('PRAGMA journal_mode=WAL;');
+    } catch (Throwable $e) {
+        if (gb_db_is_readonly_error($e)) {
+            gb_db_warn_once(
+                'wal-readonly',
+                'GuardianBridge DB warning: SQLite opened in read-only mode; WAL unavailable. ' . $e->getMessage()
+            );
+        } else {
+            throw $e;
+        }
+    }
+
+    // Avoid running full CREATE/ALTER schema path on every request when schema is already current.
+    if (!gb_db_schema_ready($pdo)) {
+        try {
+            gb_init_db($pdo);
+        } catch (Throwable $e) {
+            if (gb_db_is_readonly_error($e)) {
+                gb_db_warn_once(
+                    'init-readonly',
+                    'GuardianBridge DB warning: Schema init skipped due to read-only DB mode. ' . $e->getMessage()
+                );
+            } else {
+                throw $e;
+            }
+        }
+    }
+
     return $pdo;
 }
 
