@@ -1142,7 +1142,23 @@ $recent_audit_entries = gb_load_audit_logs($audit_preview_limit, $audit_scope_pa
             background: rgba(96, 165, 250, 0.08);
         }
         .panel-body { flex: 1; display: flex; flex-direction: column; gap: 6px; padding: 6px; min-height: 0; }
-        .panel-title { font-size: 0.75rem; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); display: flex; justify-content: space-between; align-items: center; }
+        .panel-title { font-size: 0.75rem; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+        .panel-title-right { display: flex; align-items: center; gap: 8px; }
+        .node-scope-toggle {
+            border: 1px solid rgba(255, 255, 255, 0.16);
+            background: rgba(255, 255, 255, 0.06);
+            color: var(--text);
+            padding: 3px 8px;
+            border-radius: 999px;
+            font-size: 0.65rem;
+            letter-spacing: 0.02em;
+            cursor: pointer;
+            text-transform: none;
+        }
+        .node-scope-toggle:hover {
+            border-color: rgba(96, 165, 250, 0.45);
+            background: rgba(96, 165, 250, 0.12);
+        }
         .node-list { overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding-right: 4px; }
         .node-item {
             display: flex;
@@ -2007,8 +2023,11 @@ $recent_audit_entries = gb_load_audit_logs($audit_preview_limit, $audit_scope_pa
         </div>
         <div class="panel-body">
             <div class="panel-title">
-                <span>Nodes</span>
-                <span id="node-count">0</span>
+                <span id="node-list-title">Live Nodes</span>
+                <div class="panel-title-right">
+                    <button type="button" id="node-scope-toggle" class="node-scope-toggle">Show All</button>
+                    <span id="node-count">0</span>
+                </div>
             </div>
             <div id="node-list" class="node-list">
                 <div class="placeholder">Loading nodes...</div>
@@ -2784,9 +2803,12 @@ $recent_audit_entries = gb_load_audit_logs($audit_preview_limit, $audit_scope_pa
             const CHAT_POLLING_INTERVAL = <?= json_encode($chat_polling_interval) ?>;
             const STALE_NODE_MINUTES = <?= json_encode($stale_node_minutes) ?>;
             const STALE_NODE_SECONDS = Math.max(0, Number(STALE_NODE_MINUTES)) * 60;
+            const NODE_SCOPE_LIVE = 'live';
+            const NODE_SCOPE_ALL = 'all';
             const GATEWAY_LAT = <?= json_encode($gateway_lat) ?>;
             const GATEWAY_LON = <?= json_encode($gateway_lon) ?>;
             const csrfToken = document.getElementById('csrf-token').value;
+            let nodeListScope = NODE_SCOPE_LIVE;
             L.Icon.Default.imagePath = '/map-items/';
 
             const TILE_RADIUS_MILES = 25;
@@ -2974,6 +2996,27 @@ $recent_audit_entries = gb_load_audit_logs($audit_preview_limit, $audit_scope_pa
                 return parts.join('|');
             }
 
+            function isAllNodeScope() {
+                return nodeListScope === NODE_SCOPE_ALL;
+            }
+
+            function getNodesApiUrl() {
+                return isAllNodeScope()
+                    ? '/map-items/api_get_nodes.php?include_all=1'
+                    : '/map-items/api_get_nodes.php';
+            }
+
+            function updateNodeScopeUi() {
+                const titleEl = document.getElementById('node-list-title');
+                const toggleBtn = document.getElementById('node-scope-toggle');
+                if (titleEl) {
+                    titleEl.textContent = isAllNodeScope() ? 'All Nodes' : 'Live Nodes';
+                }
+                if (toggleBtn) {
+                    toggleBtn.textContent = isAllNodeScope() ? 'Show Live' : 'Show All';
+                }
+            }
+
             function initMap() {
                 const tileBounds = getTileBounds(GATEWAY_LAT, GATEWAY_LON, TILE_RADIUS_MILES);
                 const mapOptions = { minZoom: 10 };
@@ -3028,7 +3071,7 @@ $recent_audit_entries = gb_load_audit_logs($audit_preview_limit, $audit_scope_pa
                         if (nodesEtag) {
                             requestHeaders['If-None-Match'] = nodesEtag;
                         }
-                        const response = await fetch('/map-items/api_get_nodes.php', { headers: requestHeaders });
+                        const response = await fetch(getNodesApiUrl(), { headers: requestHeaders });
                         const responseEtag = response.headers.get('ETag');
                         if (responseEtag) {
                             nodesEtag = responseEtag;
@@ -3139,7 +3182,9 @@ $recent_audit_entries = gb_load_audit_logs($audit_preview_limit, $audit_scope_pa
                 if (nodeCount) nodeCount.textContent = nodes.length;
 
                 if (!nodes || nodes.length === 0) {
-                    nodeList.innerHTML = '<div class="placeholder">No live node data available.</div>';
+                    nodeList.innerHTML = isAllNodeScope()
+                        ? '<div class="placeholder">No node data available.</div>'
+                        : '<div class="placeholder">No live node data available.</div>';
                     return;
                 }
 
@@ -3177,7 +3222,7 @@ $recent_audit_entries = gb_load_audit_logs($audit_preview_limit, $audit_scope_pa
 
                     const nonParticipants = otherNodes.filter(n => !n.sos_parent).sort((a, b) => (b.lastHeard || 0) - (a.lastHeard || 0));
                     if (nonParticipants.length > 0) {
-                        rows.push('<div class="node-list-divider">Other Active Nodes</div>');
+                        rows.push(`<div class="node-list-divider">${isAllNodeScope() ? 'Other Nodes' : 'Other Active Nodes'}</div>`);
                         nonParticipants.forEach(node => rows.push(generateNodeListItem(node)));
                     }
                 }
@@ -5766,6 +5811,20 @@ $recent_audit_entries = gb_load_audit_logs($audit_preview_limit, $audit_scope_pa
                 const nodeName = item.dataset.nodeName || nodeId;
                 openDmChat(nodeId, nodeName);
             });
+            document.getElementById('node-scope-toggle')?.addEventListener('click', () => {
+                nodeListScope = isAllNodeScope() ? NODE_SCOPE_LIVE : NODE_SCOPE_ALL;
+                nodesEtag = '';
+                lastNodesSignature = '';
+                lastPositionsSignature = '';
+                updateNodeScopeUi();
+                if (updatePageInFlight) {
+                    updatePageInFlight.finally(() => {
+                        void updatePageData();
+                    });
+                    return;
+                }
+                void updatePageData();
+            });
 
             document.body.addEventListener('click', function(event) {
                 const button = event.target.closest('.open-dm-chat');
@@ -6025,6 +6084,7 @@ $recent_audit_entries = gb_load_audit_logs($audit_preview_limit, $audit_scope_pa
 
             initModals();
             initMap();
+            updateNodeScopeUi();
             startStatusPolling();
             setInterval(refreshNodeAges, 30000);
         });

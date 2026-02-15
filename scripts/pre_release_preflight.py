@@ -240,7 +240,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="GuardianBridge pre-release preflight checks.")
     parser.add_argument("--base-dir", default=str(DEFAULT_BASE_DIR), help="GuardianBridge base directory")
     parser.add_argument("--service-name", default="guardianbridge.service", help="systemd service name")
-    parser.add_argument("--max-dispatcher-age-seconds", type=int, default=180)
+    parser.add_argument("--max-dispatcher-age-seconds", type=int, default=120)
     parser.add_argument("--max-weather-age-minutes", type=int, default=-1, help="Override WEATHER_DATA_MAX_AGE_MINUTES")
     parser.add_argument("--max-backup-age-hours", type=int, default=24)
     parser.add_argument("--queue-warn", type=int, default=200)
@@ -302,4 +302,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-

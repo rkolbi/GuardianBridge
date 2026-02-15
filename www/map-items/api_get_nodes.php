@@ -40,7 +40,14 @@ if (!$is_map_admin && !$is_mop_operator) {
 header('Cache-Control: private, no-cache, must-revalidate');
 header('Vary: Cookie');
 
-$cache_file = '/opt/GuardianBridge/data/api_nodes_cache.json';
+$include_all = false;
+if (isset($_GET['include_all'])) {
+    $mode_raw = strtolower(trim((string)$_GET['include_all']));
+    $include_all = in_array($mode_raw, ['1', 'true', 'yes', 'on'], true);
+}
+
+$cache_variant = $include_all ? 'all' : 'live';
+$cache_file = '/opt/GuardianBridge/data/api_nodes_cache_' . $cache_variant . '.json';
 $cache_ttl_seconds = 5;
 $if_none_match = trim((string)($_SERVER['HTTP_IF_NONE_MATCH'] ?? ''));
 
@@ -132,11 +139,24 @@ if (is_array($cached)) {
 $node_statuses = gb_load_node_statuses();
 $active_sos_raw = gb_load_active_sos_logs();
 $subscribers_mtime = gb_get_subscribers_mtime();
+$all_subscribers = null;
+if ($include_all) {
+    $all_subscribers = gb_load_subscribers();
+}
 
 $required_subscriber_ids = [];
 if (is_array($node_statuses)) {
     foreach ($node_statuses as $node_id => $_status_row) {
         $id = trim((string)$node_id);
+        if ($id !== '') {
+            $required_subscriber_ids[$id] = true;
+        }
+    }
+}
+
+if ($include_all && is_array($all_subscribers)) {
+    foreach ($all_subscribers as $subscriber_id => $_subscriber_row) {
+        $id = trim((string)$subscriber_id);
         if ($id !== '') {
             $required_subscriber_ids[$id] = true;
         }
@@ -180,7 +200,9 @@ if (is_array($active_sos_raw)) {
     }
 }
 
-$subscribers = gb_load_subscribers_by_ids(array_keys($required_subscriber_ids));
+$subscribers = ($include_all && is_array($all_subscribers))
+    ? $all_subscribers
+    : gb_load_subscribers_by_ids(array_keys($required_subscriber_ids));
 
 $output_nodes = [];
 $seen_node_ids = [];
@@ -382,6 +404,49 @@ if (is_array($active_sos_events)) {
             ];
             $seen_node_ids[$ack_id] = true;
         }
+    }
+}
+
+if ($include_all && is_array($subscribers)) {
+    foreach ($subscribers as $subscriber_id => $user_data) {
+        $node_id = trim((string)$subscriber_id);
+        if ($node_id === '' || !empty($seen_node_ids[$node_id])) {
+            continue;
+        }
+
+        $address = $user_data['address'] ?? null;
+        if (is_string($address)) {
+            $address = ['street' => $address, 'city' => '', 'state' => '', 'zip' => ''];
+        }
+
+        $output_nodes[] = [
+            'node_id' => $node_id,
+            'name' => $user_data['name'] ?? null,
+            'full_name' => $user_data['full_name'] ?? null,
+            'lastHeard' => null,
+            'snr' => null,
+            'hopsAway' => null,
+            'role' => 'UNKNOWN',
+            'latitude' => null,
+            'longitude' => null,
+            'sos' => null,
+            'sos_timestamp' => null,
+            'address' => $address,
+            'address_lat' => $user_data['address_lat'] ?? null,
+            'address_lon' => $user_data['address_lon'] ?? null,
+            'use_address_coords' => !empty($user_data['use_address_coords']),
+            'phone_1' => $user_data['phone_1'] ?? null,
+            'phone_2' => $user_data['phone_2'] ?? null,
+            'email' => $user_data['email'] ?? null,
+            'notes' => $user_data['notes'] ?? null,
+            'ops_notes' => $user_data['ops_notes'] ?? null,
+            'poc_info' => $user_data['poc_info'] ?? null,
+            'sos_notify' => $user_data['sos_notify'] ?? null,
+            'sos_role' => 'NONE',
+            'sos_parent' => null,
+            'sos_message_payload' => ''
+        ];
+        $seen_node_ids[$node_id] = true;
     }
 }
 

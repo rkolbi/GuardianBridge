@@ -1699,7 +1699,10 @@ text-lg">●</span> Weather Fetcher Cron (Last run: ' . get_file_age_string($wea
                 <div id="map" class="mt-6"></div>
 
                 <div class="card p-6 mt-6">
-                    <h2 class="text-2xl font-bold mb-4 text-slate-100">Live Node List (<span id="node-list-count">...</span>)</h2>
+                    <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+                        <h2 class="text-2xl font-bold text-slate-100"><span id="node-list-title">Live Nodes</span> (<span id="node-list-count">...</span>)</h2>
+                        <button type="button" id="node-scope-toggle" class="btn btn-secondary btn-sm">Show All Nodes</button>
+                    </div>
                     <div class="overflow-x-auto">
                         <table class="w-full text-left min-w-[600px]">
                             <thead class="bg-black/20 border-b-2 border-slate-700/50">
@@ -1714,7 +1717,7 @@ text-lg">●</span> Weather Fetcher Cron (Last run: ' . get_file_age_string($wea
                                 </tr>
                             </thead>
                             <tbody id="node-list-body" class="divide-y divide-slate-700/50">
-                                <tr><td colspan="7" class="p-8 text-center text-slate-500">Loading live node data...</td></tr>
+                                <tr><td colspan="7" class="p-8 text-center text-slate-500">Loading node data...</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -2828,10 +2831,13 @@ $day ?></label>
         const CHAT_POLLING_INTERVAL = <?= json_encode(max(500, intval($all_settings['CHAT_POLLING_INTERVAL_MS'] ?? 1000))) ?>;
         const STALE_NODE_MINUTES = <?= json_encode(intval($all_settings['STALE_NODE_MINUTES'] ?? 120)) ?>;
         const STALE_NODE_SECONDS = Math.max(0, Number(STALE_NODE_MINUTES)) * 60;
+        const NODE_SCOPE_LIVE = 'live';
+        const NODE_SCOPE_ALL = 'all';
         let chatCursor = 0;
         let subscribersMtime = 0;
         let chatSubscribersMtime = 0;
         let nodesEtag = '';
+        let nodeListScope = NODE_SCOPE_LIVE;
         let dashboardEtag = '';
         let chatEtag = '';
         let chatTempGroupsToken = '';
@@ -3409,6 +3415,27 @@ $day ?></label>
             return parts.join('|');
         }
 
+        function isAllNodeScope() {
+            return nodeListScope === NODE_SCOPE_ALL;
+        }
+
+        function getNodesApiUrl() {
+            return isAllNodeScope()
+                ? '/map-items/api_get_nodes.php?include_all=1'
+                : '/map-items/api_get_nodes.php';
+        }
+
+        function updateNodeScopeUi() {
+            const titleEl = document.getElementById('node-list-title');
+            const toggleBtn = document.getElementById('node-scope-toggle');
+            if (titleEl) {
+                titleEl.textContent = isAllNodeScope() ? 'All Nodes' : 'Live Nodes';
+            }
+            if (toggleBtn) {
+                toggleBtn.textContent = isAllNodeScope() ? 'Show Live Nodes' : 'Show All Nodes';
+            }
+        }
+
         // --- MAP FUNCTIONS ---
         const TILE_RADIUS_MILES = 25;
         const EARTH_RADIUS_MILES = 3958.8;
@@ -3454,7 +3481,7 @@ $day ?></label>
                     if (!forceFresh && nodesEtag) {
                         requestHeaders['If-None-Match'] = nodesEtag;
                     }
-                    const response = await fetch('/map-items/api_get_nodes.php', { headers: requestHeaders });
+                    const response = await fetch(getNodesApiUrl(), { headers: requestHeaders });
                     const responseEtag = response.headers.get('ETag');
                     if (responseEtag) {
                         nodesEtag = responseEtag;
@@ -3517,6 +3544,7 @@ $day ?></label>
             // Update main list on Status tab
             if (mainNodeListBody && mainNodeListCount) {
                 mainNodeListCount.textContent = nodes.length;
+                updateNodeScopeUi();
                 renderHierarchicalList(mainNodeListBody, nodes);
             }
 
@@ -3529,7 +3557,9 @@ $day ?></label>
 
         function renderHierarchicalList(tbodyElement, nodes, isSosOnly = false) {
             if (!nodes || nodes.length === 0) {
-                const message = isSosOnly ? 'No active SOS events or responders.' : 'No live node data available.';
+                const message = isSosOnly
+                    ? 'No active SOS events or responders.'
+                    : (isAllNodeScope() ? 'No node data available.' : 'No live node data available.');
                 tbodyElement.innerHTML = `<tr><td colspan="7" class="p-8 text-center text-slate-500">${message}</td></tr>`;
                 return;
             }
@@ -4022,6 +4052,7 @@ $day ?></label>
 
         // --- "JUST IN TIME" INITIALIZATION & TAB LOGIC ---
         function initStatusTab() {
+            updateNodeScopeUi();
             if (!isStatusTabInitialized) {
                 isStatusTabInitialized = true;
                 if (document.getElementById('map') && !map) {
@@ -4391,6 +4422,20 @@ $day ?></label>
         // --- EVENT LISTENERS FOR CHAT FILTERS ---
         document.getElementById('show-dms-checkbox')?.addEventListener('change', renderFilteredChat);
         document.getElementById('show-sms-checkbox')?.addEventListener('change', renderFilteredChat);
+        document.getElementById('node-scope-toggle')?.addEventListener('click', () => {
+            nodeListScope = isAllNodeScope() ? NODE_SCOPE_LIVE : NODE_SCOPE_ALL;
+            nodesEtag = '';
+            lastNodesSignature = '';
+            lastPositionsSignature = '';
+            updateNodeScopeUi();
+            if (updatePageInFlight) {
+                updatePageInFlight.finally(() => {
+                    void updatePageData();
+                });
+                return;
+            }
+            void updatePageData();
+        });
 
         function normalizeTagName(value) {
             return String(value || '').trim().toUpperCase();
