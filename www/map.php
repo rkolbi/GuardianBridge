@@ -487,9 +487,21 @@ function get_env_settings($file_path, $whitelist) {
     }
     return $env_values;
 }
-function save_env_settings($file_path, $new_settings, $whitelist) {
-    if (!is_readable($file_path) || !is_writable($file_path)) {
-        error_log("GuardianBridge Error: .env file is not readable or writable: " . $file_path);
+function save_env_settings($file_path, $new_settings, $whitelist, &$error_detail = '') {
+    $error_detail = '';
+    if (!is_file($file_path)) {
+        $error_detail = ".env file not found: " . $file_path;
+        error_log("GuardianBridge Error: " . $error_detail);
+        return false;
+    }
+    if (!is_readable($file_path)) {
+        $error_detail = ".env file is not readable: " . $file_path;
+        error_log("GuardianBridge Error: " . $error_detail);
+        return false;
+    }
+    if (!is_writable($file_path)) {
+        $error_detail = ".env file is not writable: " . $file_path;
+        error_log("GuardianBridge Error: " . $error_detail);
         return false;
     }
 
@@ -524,8 +536,13 @@ function save_env_settings($file_path, $new_settings, $whitelist) {
         }
     }
 
-    if (file_put_contents($file_path, implode("\n", $updated_lines)) === false) {
-        error_log("GuardianBridge Error: Failed to write to .env file: " . $file_path);
+    if (@file_put_contents($file_path, implode("\n", $updated_lines)) === false) {
+        $last_error = error_get_last();
+        $error_detail = "Failed to write to .env file: " . $file_path;
+        if (is_array($last_error) && isset($last_error['message']) && trim((string)$last_error['message']) !== '') {
+            $error_detail .= " (" . trim((string)$last_error['message']) . ")";
+        }
+        error_log("GuardianBridge Error: " . $error_detail);
         return false;
     }
     return true;
@@ -1081,6 +1098,7 @@ directory.";
 
         if ($action === 'update_settings') {
             $new_settings = $_POST['settings'] ?? []; // Default to empty array
+            $save_error_detail = '';
 
             $checkbox_keys = ['SOS_EMAIL_ENABLED', 'SOSM_EMAIL_ENABLED', 'SOSF_EMAIL_ENABLED', 'SOSP_EMAIL_ENABLED'];
             foreach ($checkbox_keys as $key) {
@@ -1094,7 +1112,7 @@ directory.";
                 $new_settings['EMAIL_PASS'] = $current_settings['EMAIL_PASS'];
             }
 
-            if (save_env_settings($env_file, $new_settings, $manageable_settings)) {
+            if (save_env_settings($env_file, $new_settings, $manageable_settings, $save_error_detail)) {
                 $prune_note = 'Audit retention apply was skipped due to an internal error.';
                 try {
                     $retention_days = isset($new_settings['AUDIT_RETENTION_DAYS']) ? max(0, intval($new_settings['AUDIT_RETENTION_DAYS'])) : null;
@@ -1111,7 +1129,12 @@ directory.";
 
                 $message = "Settings updated successfully. " . $prune_note . " You must restart the dispatcher service from the terminal for changes to take effect.";
             } else {
-                $error = "Failed to save settings. Please check server logs.";
+                $error = "Failed to save settings.";
+                if ($save_error_detail !== '') {
+                    $error .= " " . $save_error_detail;
+                } else {
+                    $error .= " Please check server logs.";
+                }
             }
         }
 
@@ -1121,10 +1144,16 @@ directory.";
                 $error = "Auto backup interval must be a whole number of hours (0 or greater).";
             } else {
                 $interval_hours = max(0, intval($interval_raw));
-                if (save_env_settings($env_file, ['AUTO_BACKUP_INTERVAL_HOURS' => (string)$interval_hours], ['AUTO_BACKUP_INTERVAL_HOURS'])) {
+                $save_error_detail = '';
+                if (save_env_settings($env_file, ['AUTO_BACKUP_INTERVAL_HOURS' => (string)$interval_hours], ['AUTO_BACKUP_INTERVAL_HOURS'], $save_error_detail)) {
                     $message = "Auto backup interval updated to {$interval_hours} hour(s). Set to 0 to disable scheduled auto backup. Restart dispatcher for changes to take effect.";
                 } else {
-                    $error = "Failed to update auto backup interval. Please check server logs.";
+                    $error = "Failed to update auto backup interval.";
+                    if ($save_error_detail !== '') {
+                        $error .= " " . $save_error_detail;
+                    } else {
+                        $error .= " Please check server logs.";
+                    }
                 }
             }
         }
